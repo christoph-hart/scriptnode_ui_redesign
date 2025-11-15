@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<JUCERPROJECT id="rs5rYU" name="scriptnode_redesign" projectType="guiapp" useAppConfig="0"
+              addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" cppLanguageStandard="17">
+  <MAINGROUP id="MyjFPi" name="scriptnode_redesign">
+    <GROUP id="{37DFF0EB-B1EA-20E2-9CF4-F23A7F7AA107}" name="Source">
+      <FILE id="wCGwgx" name="Main.cpp" compile="1" resource="0" file="Source/Main.cpp"/>
+      <FILE id="UHs4gu" name="MainComponent.h" compile="0" resource="0" file="Source/MainComponent.h"/>
+      <FILE id="cRPbIG" name="MainComponent.cpp" compile="1" resource="0"
+            file="Source/MainComponent.cpp"/>
+    </GROUP>
+  </MAINGROUP>
+  <JUCEOPTIONS JUCE_STRICT_REFCOUNTEDPOINTER="1" HI_EXPORT_DSP_LIBRARY="0" HISE_INCLUDE_RT_NEURAL="0"
+               HISE_INCLUDE_RLOTTIE="0" HISE_RLOTTIE_DYNAMIC_LIBRARY="0"/>
+  <EXPORTFORMATS>
+    <VS2022 targetFolder="Builds/VisualStudio2022" extraCompilerFlags="/bigobj"
+            extraDefs="HISE_INCLUDE_LORIS=0&#10;">
+      <CONFIGURATIONS>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="scriptnode_redesign"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="scriptnode_redesign"/>
+      </CONFIGURATIONS>
+      <MODULEPATHS>
+        <MODULEPATH id="juce_audio_basics" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_devices" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_formats" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_processors" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_utils" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_core" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_data_structures" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_dsp" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_events" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_graphics" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_gui_basics" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_gui_extra" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_opengl" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_osc" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_product_unlocking" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_cryptography" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="hi_dsp_library" path="../../../HISE modules"/>
+        <MODULEPATH id="hi_lac" path="../../../HISE modules"/>
+        <MODULEPATH id="hi_streaming" path="../../../HISE modules"/>
+        <MODULEPATH id="hi_tools" path="../../../HISE modules"/>
+        <MODULEPATH id="hi_zstd" path="../../../HISE modules"/>
+        <MODULEPATH id="melatonin_blur" path="../../../HISE modules"/>
+        <MODULEPATH id="juce_video" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="hi_rlottie" path="../../../HISE modules"/>
+      </MODULEPATHS>
+    </VS2022>
+    <XCODE_MAC targetFolder="Builds/MacOSX" extraDefs="HISE_INCLUDE_LORIS=0">
+      <CONFIGURATIONS>
+        <CONFIGURATION isDebug="1" name="Debug" targetName="scriptnode_redesign"/>
+        <CONFIGURATION isDebug="0" name="Release" targetName="scriptnode_redesign"/>
+      </CONFIGURATIONS>
+      <MODULEPATHS>
+        <MODULEPATH id="juce_audio_basics" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_devices" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_formats" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_processors" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_audio_utils" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_core" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_data_structures" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_dsp" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_events" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_graphics" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_gui_basics" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_gui_extra" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_opengl" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_osc" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_product_unlocking" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="juce_cryptography" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="hi_dsp_library" path="../../../HISE modules"/>
+        <MODULEPATH id="hi_lac" path="../../../HISE modules"/>
+        <MODULEPATH id="hi_streaming" path="../../../HISE modules"/>
+        <MODULEPATH id="hi_tools" path="../../../HISE modules"/>
+        <MODULEPATH id="hi_zstd" path="../../../HISE modules"/>
+        <MODULEPATH id="melatonin_blur" path="../../../HISE modules"/>
+        <MODULEPATH id="juce_video" path="../../../HISE modules/JUCE/modules"/>
+        <MODULEPATH id="hi_rlottie" path="../../../HISE modules"/>
+      </MODULEPATHS>
+    </XCODE_MAC>
+  </EXPORTFORMATS>
+  <MODULES>
+    <MODULE id="hi_dsp_library" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="hi_lac" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="hi_rlottie" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="hi_streaming" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="hi_tools" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="hi_zstd" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_devices" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_formats" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_processors" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_audio_utils" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_core" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_cryptography" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_data_structures" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_dsp" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_events" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_graphics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_gui_basics" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_gui_extra" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_opengl" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_osc" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="juce_product_unlocking" showAllCode="1" useLocalCopy="0"
+            useGlobalPath="1"/>
+    <MODULE id="juce_video" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+    <MODULE id="melatonin_blur" showAllCode="1" useLocalCopy="0" useGlobalPath="1"/>
+  </MODULES>
+</JUCERPROJECT>
