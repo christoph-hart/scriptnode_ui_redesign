@@ -70,6 +70,12 @@ void NodeComponent::HeaderComponent::mouseUp(const MouseEvent& e)
 
 	auto root = findParentComponentOfClass<DspNetworkComponent>();
     Helpers::fixOverlap(root->data.getChildWithName(PropertyIds::Node), &root->um);
+    
+    Component::callRecursive<ContainerComponent>(root, [](ContainerComponent* c)
+    {
+        c->rebuildCables();
+        return false;
+    });
 }
 
 }

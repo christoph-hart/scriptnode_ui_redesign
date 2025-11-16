@@ -75,14 +75,14 @@ public:
             centreWithSize (getWidth(), getHeight());
            #endif
 
-            this->setEnableOpenGL(getContentComponent());
+            //this->setEnableOpenGL(getContentComponent());
 
             setVisible (true);
         }
 
         ~MainWindow()
         {
-            this->detachOpenGl();
+            //this->detachOpenGl();
         }
 
         void closeButtonPressed() override

@@ -78,8 +78,18 @@ struct Helpers
             {
                 type = ContainerType::Branch;
                 
-                // use parameter Value to determine active branch
-                jassertfalse;
+                type = ContainerType::Split;
+
+
+                for(int i = 0; i < numNodes; i++)
+                {
+                    MultiChannelConnection mc;
+
+                    for(int c = 0; c < numChannels; c++)
+                        mc.push_back({c, c, i == 1});
+
+                    connections.push_back(mc);
+                }
             }
 			else
             {
@@ -94,17 +104,105 @@ struct Helpers
             }
         }
         
-        static void drawCable(Graphics& g, Point<float> p1, Point<float> p2)
+        static void drawCable(Graphics& g, Point<float> p1, Point<float> p2, bool cubic)
         {
-            g.setColour(Colours::white);
-            g.drawLine({p1, p2});
+            Path p;
+            
+            p.startNewSubPath(p1);
+            
+            if(!cubic)
+            {
+                createCurve(p, p1, p2, {0.0f, 0.0f }, true);
+//                p.lineTo(p2);
+                
+                Path dashed;
+                float d[2] = { 4.0f, 4.0f };
+                
+                PathStrokeType(0.5f).createDashedStroke(dashed, p, d, 2);
+                std::swap(p, dashed);
+            }
+            else
+            {
+                createCurve(p, p1, p2, {0.0f, 0.0f }, true);
+            }
+ 
+            g.strokePath(p, PathStrokeType(1.0f));
         }
 
+        static void createCurve(Path& path, Point<float> start, Point<float> end, Point<float> velocity, bool useCubic)
+        {
+               float dx = end.x - start.x;
+               float absDx = std::abs(dx);
+
+               // Minimum outward bend when wiring backward
+               float minOffset = 80.0f;
+
+               // Use half-distance going forward, otherwise give it some breathing room
+               float controlOffset = dx > 10 ? absDx * 0.5f : minOffset;
+
+               // Control points (bend horizontally)
+               juce::Point<float> cp1 (start.x + controlOffset, start.y);
+               juce::Point<float> cp2 (end.x - controlOffset, end.y);
+
+               path.cubicTo (cp1, cp2, end);
+        }
+        
+#if 0
+        static void createCurve(Path& cable, Point<float> sourcePoint, Point<float> targetPoint, Point<float> velocity, bool useCubic)
+        {
+            auto controlPointOffset = (targetPoint.getX() - sourcePoint.getX()) * 0.5f; // 50% of the horizontal distance
+                
+            juce::Point<float> cp1 (sourcePoint.getX() + controlPointOffset, sourcePoint.getY());
+            juce::Point<float> cp2 (targetPoint.getX() - controlPointOffset, targetPoint.getY());
+            
+
+            cable.cubicTo (cp1, cp2, targetPoint);
+            
+            return;
+            
+            auto mid = Rectangle<float>(sourcePoint, targetPoint).toFloat().getCentre().toFloat();
+            
+            auto c1 = mid.withY(sourcePoint.getY());
+            auto c2 = mid.withY(targetPoint.getY());
+            
+            if(useCubic)
+            {
+                auto s2 = sourcePoint.translated(20.0f, 0.0f);
+                auto t2 = targetPoint.translated(-20.0f, 0.0f);
+                
+                cable.cubicTo(s2, c1, mid);
+                cable.cubicTo(c2, t2, targetPoint);
+                
+            }
+            else
+            {
+                auto c1 = targetPoint.withY(sourcePoint.getY());
+
+                cable.lineTo(c1);
+                cable.lineTo(targetPoint);
+            }
+        }
+
+#endif
+        
         void draw(Graphics& g, const Pins& pinPositions)
         {
+
+            
+            if(pinPositions.childPositions.empty())
+                return;
+            
             const auto delta = (float)(SignalHeight) / (float)numChannels;
             auto xOffset = 10.0f;
 
+            for(int c = 0; c < numChannels; c++)
+            {
+                Rectangle<float> s(pinPositions.containerStart, pinPositions.containerStart);
+                Rectangle<float> e(pinPositions.containerEnd, pinPositions.containerEnd);
+                g.fillEllipse(s.withSizeKeepingCentre(5.0f, 5.0f).translated(xOffset, c * delta + delta * 0.5f));
+                g.fillEllipse(e.withSizeKeepingCentre(5.0f, 5.0f).translated(-xOffset, c * delta + delta * 0.5f));
+            }
+            
             if(type == ContainerType::Serial)
             {
                 for(int i = 0; i < pinPositions.childPositions.size(); i++)
@@ -114,10 +212,10 @@ struct Helpers
                     for(int c = 0; c < numChannels; c++)
                     {
 						auto p1 = i == 0 ? pinPositions.containerStart.translated(xOffset, 0.0f) : 
-                                           pinPositions.childPositions[i - 1].second.translated(-xOffset, 0.0f);
+                                           pinPositions.childPositions[i - 1].second.translated(0.0f, 0.0f);
 
 						auto p2 = pinPositions.childPositions[i].first;
-						drawCable(g, p1.translated(0, offset), p2.translated(xOffset, offset));
+						drawCable(g, p1.translated(0, offset), p2.translated(0.0f, offset), false);
                         offset += delta;
                     }
                 }
@@ -128,7 +226,7 @@ struct Helpers
 				{
 					auto p1 = pinPositions.childPositions.back().second;
 					auto p2 = pinPositions.containerEnd;
-					drawCable(g, p1.translated(-xOffset, offset), p2.translated(-xOffset, offset));
+					drawCable(g, p1.translated(0.0f, offset), p2.translated(-xOffset, offset), false);
 					offset += delta;
 				}
             }
@@ -142,11 +240,11 @@ struct Helpers
                     {
                         float offset = delta * 0.5f + (float)cc.sourceIndex * delta;
                         auto p1 = pinPositions.containerStart.translated(xOffset, offset);
-                        auto p2 = pinPositions.childPositions[i].first.translated(xOffset, offset);
-                        auto p3 = pinPositions.childPositions[i].second.translated(-xOffset, offset);
+                        auto p2 = pinPositions.childPositions[i].first.translated(0, offset);
+                        auto p3 = pinPositions.childPositions[i].second.translated(0, offset);
                         auto p4 = pinPositions.containerEnd.translated(-xOffset, offset);
-                        drawCable(g, p1, p2);
-                        drawCable(g, p3, p4);
+                        drawCable(g, p1, p2, false);
+                        drawCable(g, p3, p4, false);
                     }
 				}
             }
@@ -162,11 +260,24 @@ struct Helpers
 	static constexpr int HeaderHeight = 24;
 	static constexpr int SignalHeight = 40;
     static constexpr int NodeMargin = 50;
+    static constexpr int ParameterHeight = 32;
+    static constexpr int ParameterWidth = 128;
 
     static bool isProcessNode(const ValueTree& v)
     {
         jassert(v.getType() == PropertyIds::Node);
-        return v[PropertyIds::FactoryPath].toString().upToFirstOccurrenceOf(".", false, false) != "control";
+        auto path = v[PropertyIds::FactoryPath].toString();
+            
+        auto factory = path.upToFirstOccurrenceOf(".", false, false);
+        auto nid = path.fromFirstOccurrenceOf(".", false, false);
+        
+        if(factory == "control")
+            return false;
+        
+        if(nid.contains("_cable"))
+            return false;
+        
+        return true;
     }
 
     static bool isContainerNode(const ValueTree& v)
@@ -193,7 +304,7 @@ struct Helpers
         if(verticalContainers.contains(p))
             return true;
 
-        return !isProcessNode(node);
+        return false;
     }
 
     static void setMinPosition(Rectangle<int>& b, Point<int> minOffset)
@@ -215,10 +326,7 @@ struct Helpers
         if(node[PropertyIds::ShowParameters])
             minX += 100;
 
-        auto minY = 30 + HeaderHeight;
-
-        if(isProcessNode(node) || isContainerNode(node))
-            minY += SignalHeight;
+        auto minY = 10 + HeaderHeight;
 
 		RectangleList<int> childBounds;
 
@@ -235,7 +343,7 @@ struct Helpers
 				auto fullBounds = childBounds.getBounds();
 
 				if (shouldBeVertical(node, childNode))
-					cb = cb.withY(fullBounds.getBottom() + NodeMargin);
+					cb = cb.withY(fullBounds.getBottom() + 10);
 				else
 					cb = cb.withX(fullBounds.getRight() + NodeMargin);
 			}
@@ -254,8 +362,8 @@ struct Helpers
 		updateBounds(node, {
             jmax(bounds.getX(), minX),
             jmax(bounds.getY(), minY),
-            jmax(currentWidth, fullBounds.getWidth() + NodeMargin, bounds.getWidth()),
-            jmax(currentHeight, fullBounds.getHeight() + NodeMargin, bounds.getHeight()),
+            jmax(currentWidth, fullBounds.getRight() + NodeMargin, bounds.getWidth()),
+            jmax(currentHeight, fullBounds.getBottom() + NodeMargin, bounds.getHeight()),
             }, um);
     }
 
@@ -279,7 +387,7 @@ struct Helpers
 		v.setProperty(UIPropertyIds::height, newBounds.getHeight(), um);
     }
 
-    static void fixOverlap(ValueTree& v, UndoManager* um)
+    static void fixOverlap(ValueTree v, UndoManager* um)
     {
         fixOverlapRecursive(v, um);
     }
@@ -288,6 +396,14 @@ struct Helpers
     {
         jassert(v.getType() == PropertyIds::Node);
 
+        
+        auto t = v[PropertyIds::FactoryPath].toString();
+        
+        if(t == "container.midichain")
+            return Colour(0xFFC65638);
+        if(t == "container.modchain")
+            return Colour(0xffbe952c);
+        
         auto c = (int64)v[PropertyIds::NodeColour];
 
         if(c != 0)
@@ -308,7 +424,7 @@ struct Helpers
         if(text.isEmpty())
             text = v[PropertyIds::ID].toString();
 
-        text << " (" << v[PropertyIds::FactoryPath].toString() << ")";
+        //text << " (" << v[PropertyIds::FactoryPath].toString() << ")";
 
         return text;
     }
@@ -331,12 +447,9 @@ struct Helpers
         auto h = (int)v[UIPropertyIds::height];
 
         if(w == 0)
-            w = 250;
+            w = 200;
         if(h == 0)
             h = 100;
-
-        if(v[PropertyIds::ShowParameters])
-            w += 100;
 
         if(v[PropertyIds::Folded])
             h = 50;
@@ -356,7 +469,9 @@ struct NodeComponent: public Component,
           parent(parent_),
           powerButton("bypass", nullptr, parent_),
           dragger()
-        {};
+        {
+            addAndMakeVisible(powerButton);
+        };
 
         void resized() override
         {
@@ -389,7 +504,8 @@ struct NodeComponent: public Component,
 			g.setColour(Helpers::getNodeColour(parent.getValueTree()));
 			g.fillRect(b);
 			g.setColour(Colours::white);
-			g.drawText(Helpers::getHeaderTitle(parent.getValueTree()), b, Justification::centred);
+            b.removeFromLeft(getHeight());
+			g.drawText(Helpers::getHeaderTitle(parent.getValueTree()), b, Justification::left);
         }
 
         NodeComponent& parent;
@@ -417,6 +533,147 @@ struct NodeComponent: public Component,
         data.setProperty(id, !v, um);
     }
 
+    struct ParameterComponent: public Component
+    {
+        ParameterComponent(const ValueTree& v, UndoManager* um_):
+          data(v),
+          um(um_)
+        {
+            addAndMakeVisible(slider);
+            slider.setLookAndFeel(&laf);
+            slider.setRange(0.0, 1.0, 0.0);
+            slider.setSliderStyle(Slider::RotaryHorizontalVerticalDrag);
+            slider.setTextBoxStyle(Slider::TextEntryBoxPosition::NoTextBox, false, 0, 0);
+
+            Colour tr = Colours::transparentBlack;
+            slider.setColour(HiseColourScheme::ColourIds::ComponentFillTopColourId, tr);
+            slider.setColour(HiseColourScheme::ColourIds::ComponentFillBottomColourId, tr);
+            slider.setColour(HiseColourScheme::ColourIds::ComponentOutlineColourId, tr);
+        };
+        
+        void paint(Graphics& g) override
+        {
+            auto name = data[PropertyIds::ID].toString();
+            g.setFont(GLOBAL_BOLD_FONT());
+            g.setColour(Colours::white);
+            auto tb = getLocalBounds().toFloat();
+            tb.removeFromLeft(Helpers::ParameterHeight + 5.0f);
+            g.drawText(name, tb, Justification::left);
+        }
+        
+        
+        hise::GlobalHiseLookAndFeel laf;
+        std::vector<ParameterComponent*> targets;
+
+        bool rebuildTargets(NodeComponent* parent)
+        {
+            targets.clear();
+            
+            Component::callRecursive<ParameterComponent>(parent, [&](ParameterComponent* c)
+            {
+                auto p1 = c->data[PropertyIds::ID].toString();
+                auto n1 = c->data.getParent().getParent()[PropertyIds::ID].toString();
+                
+                for(auto d: data.getChildWithName(PropertyIds::Connections))
+                {
+                    auto p2 = d[PropertyIds::ParameterId].toString();
+                    auto n2 = d[PropertyIds::NodeId].toString();
+                    
+                    auto pMatch = p1 == p2;
+                    auto nMatch = n1 == n2;
+                    
+                    if(pMatch && nMatch)
+                    {
+                        targets.push_back(c);
+                        break;
+                    }
+                }
+
+                return false;
+            });
+            
+            return !targets.empty();
+        }
+        
+        void resized() override
+        {
+            slider.setBounds(getLocalBounds().removeFromLeft(Helpers::ParameterHeight));
+        }
+        
+        ValueTree data;
+        UndoManager* um;
+        juce::Slider slider;
+    };
+    
+    
+    struct ModOutputComponent: public Component
+    {
+        ModOutputComponent(const ValueTree& v, UndoManager* um_):
+          data(v),
+          um(um_)
+        {
+        }
+        
+        void paint(Graphics& g) override
+        {
+            g.setColour(Colours::white);
+            g.setFont(GLOBAL_BOLD_FONT());
+            
+            auto b = getLocalBounds().toFloat();
+            b.removeFromRight(20);
+            
+            if(data.getType() == PropertyIds::ModulationTargets)
+            {
+                g.drawText("Output", b, Justification::right);
+            }
+            else
+            {
+                auto idx = data.getParent().indexOf(data);
+                g.drawText("Output "+ String(idx+1), b, Justification::right);
+            }
+        }
+        
+        std::vector<ParameterComponent*> targets;
+
+        bool rebuildTargets(NodeComponent* parent)
+        {
+            targets.clear();
+            
+            Component::callRecursive<ParameterComponent>(parent, [&](ParameterComponent* c)
+            {
+                auto p1 = c->data[PropertyIds::ID].toString();
+                auto n1 = c->data.getParent().getParent()[PropertyIds::ID].toString();
+                
+                auto conTree = data;
+                if(conTree.getType() == PropertyIds::SwitchTarget)
+                    conTree = data.getChildWithName(PropertyIds::Connections);
+                
+                for(auto d: conTree)
+                {
+                    auto p2 = d[PropertyIds::ParameterId].toString();
+                    auto n2 = d[PropertyIds::NodeId].toString();
+                    
+                    auto pMatch = p1 == p2;
+                    auto nMatch = n1 == n2;
+                    
+                    if(pMatch && nMatch)
+                    {
+                        targets.push_back(c);
+                        break;
+                    }
+                }
+
+                return false;
+            });
+            
+            return !targets.empty();
+        }
+        
+        ValueTree data;
+        UndoManager* um;
+            
+    };
+    
     NodeComponent(const ValueTree& v, UndoManager* um_, bool useSignal):
       data(v),
       um(um_),
@@ -435,8 +692,141 @@ struct NodeComponent: public Component,
             VT_BIND_PROPERTY_LISTENER(onPositionUpdate));
 
         setBounds(Helpers::getBounds(v));
+        
+        for(auto p: data.getChildWithName(PropertyIds::Parameters))
+        {
+            addAndMakeVisible(parameters.add(new ParameterComponent(p, um)));
+        }
+          
+        auto modOutput = data.getChildWithName(PropertyIds::ModulationTargets);
+          
+        if(modOutput.isValid())
+        {
+            addAndMakeVisible(modOutputs.add(new ModOutputComponent(modOutput, um)));
+        }
+        
+        for(auto st: data.getChildWithName(PropertyIds::SwitchTargets))
+            addAndMakeVisible(modOutputs.add(new ModOutputComponent(st, um)));
+        
+        resized();
     };
 
+    struct CableComponent: public Component
+    {
+        CableComponent(NodeComponent& parent, Point<float> start, Point<float> end)
+        {
+            setInterceptsMouseClicks(false, false);
+            Rectangle<float> a(start, end);
+            setBounds(a.toNearestInt().expanded(22));
+            setRepaintsOnMouseActivity(true);
+        }
+        
+        bool hitTest(int x, int y) override
+        {
+            Point<float> sp((float)x, (float)y);
+            Point<float> tp;
+            p.getNearestPoint(sp, tp);
+            
+            return sp.getDistanceFrom(tp) < 20.0f;
+        }
+        
+        void setCablePoints(NodeComponent& parent, Point<float> start, Point<float> end)
+        {
+            s = getLocalPoint(&parent, start);
+            e = getLocalPoint(&parent, end);
+            
+            p.startNewSubPath(s);
+                        
+            Helpers::CableSetup::createCurve(p, s, e.translated(-3.0f, 0.0f), {0.0f, 0.0f }, true);
+        }
+        
+        void mouseMove(const MouseEvent& e) override
+        {
+            over = contains(e.getPosition());
+            repaint();
+        }
+        
+        void mouseExit(const MouseEvent& e) override
+        {
+            over = false;
+            repaint();
+        }
+        
+        bool over = false;
+        
+        Point<float> s, e;
+        Path p;
+        
+        void paint(Graphics& g) override
+        {
+            g.setColour(colour);
+            g.strokePath(p, PathStrokeType(over ? 3.0f : 1.0f));
+            Path arrow;
+            g.fillEllipse(Rectangle<float>(s, s).withSizeKeepingCentre(6.0f, 6.0f));
+            arrow.startNewSubPath(e);
+            arrow.lineTo(e.translated(-7.0f, 5.0f));
+            arrow.lineTo(e.translated(-7.0f, -5.0f));
+            arrow.closeSubPath();
+            g.fillPath(arrow);
+        }
+        
+        Colour colour;
+    };
+    
+    OwnedArray<CableComponent> cables;
+    
+    void createParameterCables()
+    {
+        for(auto src: parameters)
+        {
+            for(auto dst: src->targets)
+            {
+                auto start = getLocalArea(src, src->getLocalBounds()).toFloat();
+                Point<float> s( start.getRight(), start.getCentreY());
+                auto end = getLocalArea(dst, dst->getLocalBounds()).toFloat();
+                Point<float> e( end.getX(), end.getCentreY());
+
+                auto colour = Helpers::getNodeColour(dst->data.getParent().getParent());
+                
+                if(colour.isTransparent())
+                    colour = Colours::grey;
+                
+                auto nc = new CableComponent(*this, s, e);
+                
+                cables.add(nc);
+                addAndMakeVisible(nc);
+                nc->setCablePoints(*this, s, e);
+                nc->colour = colour;
+            }
+        }
+    }
+    
+    void createModCables(NodeComponent* parent)
+    {
+        for(auto src: modOutputs)
+        {
+            for(auto dst: src->targets)
+            {
+                auto start = parent->getLocalArea(src, src->getLocalBounds()).toFloat();
+                Point<float> s( start.getRight(), start.getCentreY());
+                auto end = parent->getLocalArea(dst, dst->getLocalBounds()).toFloat();
+                Point<float> e( end.getX(), end.getCentreY());
+
+                auto colour = Helpers::getNodeColour(dst->data.getParent().getParent());
+                
+                if(colour.isTransparent())
+                    colour = Colours::grey;
+
+                
+                auto nc = new CableComponent(*parent, s, e);
+                parent->cables.add(nc);
+                nc->colour = colour;
+                parent->addAndMakeVisible(nc);
+                nc->setCablePoints(*parent, s, e);
+            }
+        }
+    }
+    
     virtual ~NodeComponent() {};
 
     Path createPath(const String& url) const override
@@ -460,14 +850,69 @@ struct NodeComponent: public Component,
 
         if(signalComponent != nullptr)
             signalComponent->setBounds(b.removeFromTop(Helpers::SignalHeight));
+        
+        auto pb = b.removeFromLeft(Helpers::ParameterWidth);
+        
+        auto mb = b.removeFromRight(Helpers::ParameterWidth);
+        
+        for(int i = parameters.size()-1; i >= 0; i--)
+        {
+            auto p = parameters[i];
+            p->setBounds(pb.removeFromBottom(Helpers::ParameterHeight));
+            pb.removeFromBottom(5);
+        }
+        
+        for(auto m: modOutputs)
+        {
+            m->setBounds(mb.removeFromTop(24));
+        }
     }
 
-    ValueTree getValueTree() const { return data; }
+    ValueTree& getValueTree() { return data; }
 
     SignalComponent* getSignalComponent() const { return signalComponent.get(); }
 
+    bool rebuildModTargets(NodeComponent* n)
+    {
+        auto ok = false;
+        
+        for(auto m: modOutputs)
+            ok |= m->rebuildTargets(n);
+        
+        return ok;
+    }
+    
+    void setFixSize(Rectangle<int> extraBounds)
+    {
+        int x = 0;
+        
+        if(!parameters.isEmpty())
+            x += Helpers::ParameterWidth;
+        
+        x += extraBounds.getWidth();
+        
+        if(!modOutputs.isEmpty())
+            x += Helpers::ParameterWidth;
+        
+        int y = Helpers::HeaderHeight;
+        
+        if(signalComponent != nullptr)
+            y += Helpers::SignalHeight;
+                
+        auto bodyHeight = jmax(extraBounds.getHeight(), parameters.size() * (Helpers::ParameterHeight+5), modOutputs.size() * 24);
+
+        Rectangle<int> nb(getPosition(), getPosition().translated(x, y + bodyHeight));
+        
+        Helpers::updateBounds(getValueTree(), nb, um);
+        
+        setSize(x, y + bodyHeight);
+    }
+    
 protected:
 
+    OwnedArray<ParameterComponent> parameters;
+    OwnedArray<ModOutputComponent> modOutputs;
+    
     ScopedPointer<SignalComponent> signalComponent;
     HeaderComponent header;
 
@@ -484,7 +929,7 @@ struct ProcessNodeComponent: public NodeComponent
     ProcessNodeComponent(const ValueTree& v, UndoManager* um_):
       NodeComponent(v, um_, true)
     {
-		
+        setFixSize({});
     }
 
     void paint(Graphics& g) override
@@ -498,7 +943,7 @@ struct NoProcessNodeComponent: public NodeComponent
 	NoProcessNodeComponent(const ValueTree& v, UndoManager* um_) :
 		NodeComponent(v, um_, false)
 	{
-		
+        setFixSize({});
 	}
 
     void paint(Graphics& g) override
@@ -515,6 +960,7 @@ struct ContainerComponent : public NodeComponent
 	{
 		addAndMakeVisible(resizer);
 
+        setInterceptsMouseClicks(false, true);
 		nodeListener.setCallback(data.getChildWithName(PropertyIds::Nodes),
 			Helpers::UIMode,
 			VT_BIND_CHILD_LISTENER(onChildAddRemove));
@@ -529,9 +975,13 @@ struct ContainerComponent : public NodeComponent
 
     void paint(Graphics& g) override
     {
-		g.setColour(Helpers::getNodeColour(data));
+        auto nodeColour = Helpers::getNodeColour(data);
+
+		g.setColour(nodeColour);
         g.drawRect(getLocalBounds(), 1);
 
+        g.fillAll(Colour(0x77222222));
+        
         Helpers::CableSetup::Pins pins;
         pins.containerStart = signalComponent->getPosition().toFloat();
         pins.containerEnd = signalComponent->getBoundsInParent().getTopRight().toFloat();
@@ -545,10 +995,16 @@ struct ContainerComponent : public NodeComponent
                 auto sb = getLocalArea(sc, sc->getLocalBounds()).toFloat();
                 pins.childPositions.push_back({ sb.getTopLeft(), sb.getTopRight() });
             }
+            
+            
         }
-
+        
+        g.setColour(Helpers::getNodeColour(data));
         cs.draw(g, pins);
+
     }
+    
+    Image cableImage;
 
 	void onChildAddRemove(const ValueTree& v, bool wasAdded)
 	{
@@ -587,10 +1043,38 @@ struct ContainerComponent : public NodeComponent
 			setSize(getWidth(), (int)newValue);
 	}
 
+    void rebuildCables()
+    {
+        auto ok = false;
+        
+        for(auto cn: childNodes)
+            ok |= cn->rebuildModTargets(this);
+        
+        for(auto p: parameters)
+            ok |= p->rebuildTargets(this);
+        
+        cables.clear();
+        
+        if(ok)
+        {
+            for(auto cn: childNodes)
+                cn->createModCables(this);
+            
+            createParameterCables();
+
+            for(auto c: cables)
+                c->toBack();
+        }
+    }
+    
 	void resized() override
 	{
         NodeComponent::resized();
 
+        
+        
+        rebuildCables();
+        
 		auto b = getLocalBounds();
 
 		data.setProperty(UIPropertyIds::width, getWidth(), um);
@@ -604,6 +1088,8 @@ struct ContainerComponent : public NodeComponent
 
 	valuetree::PropertyListener resizeListener;
 	valuetree::ChildListener nodeListener;
+    
+    
 };
 
 struct DspNetworkComponent: public Component
@@ -623,6 +1109,8 @@ struct DspNetworkComponent: public Component
 			Helpers::UIMode,
 			VT_BIND_PROPERTY_LISTENER(onContainerResize));
 
+        Helpers::fixOverlap(rootContainer, &um);
+        
         auto b = Helpers::getBounds(rootContainer);
         setSize(b.getWidth(), b.getHeight());
     }
