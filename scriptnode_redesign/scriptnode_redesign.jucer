@@ -4,6 +4,45 @@
               addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" cppLanguageStandard="17">
   <MAINGROUP id="MyjFPi" name="scriptnode_redesign">
     <GROUP id="{37DFF0EB-B1EA-20E2-9CF4-F23A7F7AA107}" name="Source">
+      <GROUP id="{3121116D-14F5-C99E-65EF-96AB5FB4AF9F}" name="ui">
+        <FILE id="C6tinm" name="ContainerComponent.cpp" compile="0" resource="0"
+              file="Source/ui/ContainerComponent.cpp"/>
+        <FILE id="g8Bp0S" name="ContainerComponent.h" compile="0" resource="0"
+              file="Source/ui/ContainerComponent.h"/>
+        <FILE id="wdjiwA" name="DspNetworkComponent.cpp" compile="0" resource="0"
+              file="Source/ui/DspNetworkComponent.cpp"/>
+        <FILE id="uAUwS6" name="DspNetworkComponent.h" compile="0" resource="0"
+              file="Source/ui/DspNetworkComponent.h"/>
+        <FILE id="MUk7nM" name="Helpers.cpp" compile="0" resource="0" file="Source/ui/Helpers.cpp"/>
+        <FILE id="NqH2Sx" name="Helpers.h" compile="0" resource="0" file="Source/ui/Helpers.h"/>
+        <FILE id="CGny9H" name="include.cpp" compile="1" resource="0" file="Source/ui/include.cpp"/>
+        <FILE id="zQKDPy" name="include.h" compile="0" resource="0" file="Source/ui/include.h"/>
+        <FILE id="OlcolT" name="NodeComponent.cpp" compile="0" resource="0"
+              file="Source/ui/NodeComponent.cpp"/>
+        <FILE id="vK9w3N" name="NodeComponent.h" compile="0" resource="0" file="Source/ui/NodeComponent.h"/>
+        <FILE id="ln22GK" name="NodeObjects.cpp" compile="0" resource="0" file="Source/ui/NodeObjects.cpp"/>
+        <FILE id="ICTn5j" name="NodeObjects.h" compile="0" resource="0" file="Source/ui/NodeObjects.h"/>
+        <FILE id="jCZCEj" name="NodeSubComponent.cpp" compile="0" resource="0"
+              file="Source/ui/NodeSubComponent.cpp"/>
+        <FILE id="faXOFu" name="NodeSubComponent.h" compile="0" resource="0"
+              file="Source/ui/NodeSubComponent.h"/>
+      </GROUP>
+      <GROUP id="{F0D7A64F-7CB2-0A6D-CDA0-C5540F8C4C7A}" name="bodys">
+        <FILE id="dO3MxX" name="cable_expr.png" compile="0" resource="1" file="Source/bodys/cable_expr.png"/>
+        <FILE id="p6QwfA" name="expr.png" compile="0" resource="1" file="Source/bodys/expr.png"/>
+        <FILE id="QLBbr3" name="filter.png" compile="0" resource="1" file="Source/bodys/filter.png"/>
+        <FILE id="CBZyWA" name="one_pole.png" compile="0" resource="1" file="Source/bodys/one_pole.png"/>
+        <FILE id="HFbvfY" name="oscillator.png" compile="0" resource="1" file="Source/bodys/oscillator.png"/>
+        <FILE id="A7OFlt" name="peak.png" compile="0" resource="1" file="Source/bodys/peak.png"/>
+        <FILE id="LbUudl" name="pma.png" compile="0" resource="1" file="Source/bodys/pma.png"/>
+        <FILE id="HCO0Vj" name="pma_unscaled.png" compile="0" resource="1"
+              file="Source/bodys/pma_unscaled.png"/>
+        <FILE id="DbBdPM" name="ramp.png" compile="0" resource="1" file="Source/bodys/ramp.png"/>
+        <FILE id="GVQaCx" name="simple_ar.png" compile="0" resource="1" file="Source/bodys/simple_ar.png"/>
+        <FILE id="P2Rrgo" name="snex_shaper.png" compile="0" resource="1" file="Source/bodys/snex_shaper.png"/>
+        <FILE id="zeZGUy" name="table.png" compile="0" resource="1" file="Source/bodys/table.png"/>
+        <FILE id="zGkxGa" name="xfader.png" compile="0" resource="1" file="Source/bodys/xfader.png"/>
+      </GROUP>
       <FILE id="wCGwgx" name="Main.cpp" compile="1" resource="0" file="Source/Main.cpp"/>
       <FILE id="UHs4gu" name="MainComponent.h" compile="0" resource="0" file="Source/MainComponent.h"/>
       <FILE id="cRPbIG" name="MainComponent.cpp" compile="1" resource="0"
@@ -14,7 +53,7 @@
                HISE_INCLUDE_RLOTTIE="0" HISE_RLOTTIE_DYNAMIC_LIBRARY="0"/>
   <EXPORTFORMATS>
     <VS2022 targetFolder="Builds/VisualStudio2022" extraCompilerFlags="/bigobj"
-            extraDefs="HISE_INCLUDE_LORIS=0&#10;">
+            extraDefs="HISE_INCLUDE_LORIS=0&#10;USE_BACKEND=1">
       <CONFIGURATIONS>
         <CONFIGURATION isDebug="1" name="Debug" targetName="scriptnode_redesign"/>
         <CONFIGURATION isDebug="0" name="Release" targetName="scriptnode_redesign"/>

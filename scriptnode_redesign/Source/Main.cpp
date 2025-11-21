@@ -75,14 +75,18 @@ public:
             centreWithSize (getWidth(), getHeight());
            #endif
 
-            //this->setEnableOpenGL(getContentComponent());
+#if JUCE_WINDOWS
+            this->setEnableOpenGL(getContentComponent());
+#endif
 
             setVisible (true);
         }
 
         ~MainWindow()
         {
-            //this->detachOpenGl();
+#if JUCE_WINDOWS
+            this->detachOpenGl();
+#endif
         }
 
         void closeButtonPressed() override
