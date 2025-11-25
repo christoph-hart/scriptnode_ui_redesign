@@ -96,6 +96,29 @@ juce::var Helpers::getNodeProperty(const ValueTree& v, const Identifier& id, con
 	return defaultValue;
 }
 
+juce::String Helpers::getUniqueId(const String& prefix, const ValueTree& rootTree)
+{
+	int suffix = 0;
+
+	valuetree::Helpers::forEach(rootTree, [&](const ValueTree& v)
+	{
+		if(v.getType() == PropertyIds::Node)
+		{
+			auto thisId = v[PropertyIds::ID].toString();
+
+			if(thisId.contains(prefix))
+				suffix++;
+		}
+
+		return false;
+	});
+
+	if(suffix == 0)
+		return prefix;
+	else
+		return prefix + String(suffix+1);
+}
+
 void Helpers::setNodeProperty(ValueTree& v, const Identifier& propertyName, const var& value, UndoManager* um)
 {
 	jassert(v.getType() == PropertyIds::Node);
@@ -130,16 +153,7 @@ bool Helpers::hasRoutableSignal(const ValueTree& v)
 
 bool Helpers::isProcessNode(const ValueTree& v)
 {
-	jassert(v.getType() == PropertyIds::Node);
-	auto path = getFactoryPath(v);
-
-	if (path.first == "control")
-		return false;
-
-	if (path.second.contains("_cable"))
-		return false;
-
-	return true;
+	return DataBaseHelpers::isSignalNode(v);
 }
 
 bool Helpers::isVerticalContainer(const ValueTree& v)
@@ -198,7 +212,11 @@ bool Helpers::isProcessingSignal(const ValueTree& v)
 
 	if(isContainerNode(v))
 	{
+		
 		auto container = getFactoryPath(v).second;
+
+		if(container == "offline")
+			return false;
 
 		static const StringArray switchers = {
 			"midichain",
@@ -380,6 +398,9 @@ juce::String Helpers::getSignalDescription(const ValueTree& container)
 
 	auto ch =  " (" + String(getNumChannels(container)) + " ch.)";
 
+	if(path == "offline")
+		return "No signal in this container";
+
 	if(!forceSerial && path == "midichain")
 		return "Signal with MIDI events";
 
@@ -556,6 +577,36 @@ void Helpers::fixOverlapRecursive(ValueTree& node, UndoManager* um, bool sortPro
 		jmax(currentWidth, fullBounds.getRight() + NodeMargin, bounds.getWidth()),
 		jmax(currentHeight, fullBounds.getBottom() + NodeMargin, bounds.getHeight()),
 		}, um);
+}
+
+void Helpers::updateChannelRecursive(ValueTree& v, int numChannels, UndoManager* um)
+{
+	jassert(v.getType() == PropertyIds::Node);
+
+	auto path = getFactoryPath(v);
+
+	auto isMulti = path.second == "multi";
+	auto isSideChain = path.second == "sidechain";
+	auto isModChain = path.second == "modchain";
+
+	if (isSideChain)
+		numChannels *= 2;
+
+	if (isModChain)
+		numChannels = 1;
+
+	v.setProperty(PropertyIds::CompileChannelAmount, numChannels, um);
+
+	auto childNodes = v.getChildWithName(PropertyIds::Nodes);
+
+	if (isMulti)
+		numChannels /= childNodes.getNumChildren();
+
+
+	for (auto cn : childNodes)
+	{
+		updateChannelRecursive(cn, numChannels, um);
+	}
 }
 
 void Helpers::resetLayout(ValueTree& nt, UndoManager* um)

@@ -76,7 +76,7 @@ public:
            #endif
 
 #if JUCE_WINDOWS
-            this->setEnableOpenGL(getContentComponent());
+            this->setEnableOpenGL(this);
 #endif
 
             setVisible (true);

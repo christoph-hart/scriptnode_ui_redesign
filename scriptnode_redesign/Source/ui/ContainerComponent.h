@@ -50,7 +50,8 @@ struct ContainerComponent : public NodeComponent
 			Split,
 			Multi,
 			ModChain,
-			Branch
+			Branch,
+			Offline
 		};
 
 		struct Connection
@@ -87,7 +88,7 @@ struct ContainerComponent : public NodeComponent
 				{
 					h.first.setWidth(jmax(h.first.getWidth(), Helpers::SignalHeight));
 					h.first.setHeight(jmax(h.first.getHeight(), Helpers::SignalHeight));
-					h.first = h.first.expanded(0, Helpers::SignalHeight).constrainedWithin(fullBounds);
+					//h.first = h.first.expanded(0, Helpers::SignalHeight).constrainedWithin(fullBounds);
 				}
 
 				return hz;
@@ -130,7 +131,7 @@ struct ContainerComponent : public NodeComponent
 		{
 			connections.clear();
 
-			colour = Helpers::getNodeColour(v);
+			
 			numNodes = v.getChildWithName(PropertyIds::Nodes).getNumChildren();
 			numChannels = Helpers::getNumChannels(v);
 
@@ -154,7 +155,7 @@ struct ContainerComponent : public NodeComponent
 			{
 				type = ContainerType::Multi;
 
-				auto numPerNode = numChannels / numNodes;
+				auto numPerNode = numNodes == 0 ? numChannels : numChannels / numNodes;
 
 				for (int i = 0; i < numNodes; i++)
 				{
@@ -183,12 +184,18 @@ struct ContainerComponent : public NodeComponent
 			else if (n == "modchain")
 			{
 				type = ContainerType::ModChain;
+				numChannels = 1;
 
 				MultiChannelConnection mc;
 
 				mc.push_back({ 0, 0, true });
 
 				connections.push_back(mc);
+			}
+			else if (n == "offline")
+			{
+				type = ContainerType::Offline;
+				numChannels = 0;
 			}
 			else
 			{
@@ -210,59 +217,22 @@ struct ContainerComponent : public NodeComponent
 			isForcedVertical = type == CableSetup::ContainerType::Serial && Helpers::isVerticalContainer(parent.getValueTree());
 		}
 
-		static void drawVerticalCable(Graphics& g, Point<float> sourcePoint, Point<float> targetPoint, Colour c)
-		{
-			drawSignalCable(g, sourcePoint, targetPoint, c);
-			return;
-#if 0
-			Path p;
-
-			p.startNewSubPath(sourcePoint);
-
-			auto controlPointOffset = (targetPoint.getX() - sourcePoint.getX()) * 0.5f; // 50% of the horizontal distance
-
-			juce::Point<float> cp1(sourcePoint.getX() + controlPointOffset, sourcePoint.getY());
-			juce::Point<float> cp2(targetPoint.getX() - controlPointOffset, targetPoint.getY());
-
-			p.cubicTo(cp1, cp2, targetPoint);
-
-			Path dashed;
-			float d[2] = { 4.0f, 4.0f };
-
-			PathStrokeType(2.0f).createDashedStroke(dashed, p, d, 2);
-			std::swap(p, dashed);
-
-			g.fillPath(p);
-#endif
-		}
-
-		static void drawSignalCable(Graphics& g, Point<float> p1, Point<float> p2, Colour c)
+		static void drawSignalCable(Graphics& g, Point<float> p1, Point<float> p2, Colour c, bool preferLines)
 		{
 			Path p;
+
 			p.startNewSubPath(p1);
-
 			g.setColour(Colours::black.withAlpha(0.7f));
 
 			g.fillEllipse(Rectangle<float>(p1, p1).withSizeKeepingCentre(4.0f, 4.0f));
 			g.fillEllipse(Rectangle<float>(p2, p2).withSizeKeepingCentre(4.0f, 4.0f));
 
-			Helpers::createCurve(p, p1, p2, {}, false);
-
-			//p.lineTo(p2);
+			Helpers::createCurve(p, p1, p2, preferLines);
 
 			g.strokePath(p, PathStrokeType(3.0f));
 			g.setColour(c);
 
 			g.strokePath(p, PathStrokeType(1.0f, PathStrokeType::beveled, PathStrokeType::rounded));
-		}
-
-		static void drawParameterCable(Graphics& g, Point<float> p1, Point<float> p2)
-		{
-			Path p;
-
-			p.startNewSubPath(p1);
-			Helpers::createCurve(p, p1, p2, { 0.0f, 0.0f }, true);
-			g.strokePath(p, PathStrokeType(1.0f));
 		}
 
 		bool isVertical() const
@@ -280,6 +250,18 @@ struct ContainerComponent : public NodeComponent
 
 		void setDragPosition(Rectangle<int> currentlyDraggedNodeBounds, Point<int> downPos)
 		{
+			dragPosition = currentlyDraggedNodeBounds;
+			dropIndex = -1;
+
+			for(auto ab: parent.addButtons)
+			{
+				auto lp = ab->getLocalPoint(&parent, downPos).toFloat();
+				dropIndex = jmax(dropIndex, ab->onNodeDrag(lp));
+			}
+
+			parent.repaint();
+
+#if 0
 			dragPosition = currentlyDraggedNodeBounds;
 
 			dropIndex = -1;
@@ -315,6 +297,7 @@ struct ContainerComponent : public NodeComponent
 					}
 				}
 			}
+#endif
 
 			parent.repaint();
 
@@ -322,15 +305,11 @@ struct ContainerComponent : public NodeComponent
 
 		void draw(Graphics& g)
 		{
+			auto colour = Helpers::getNodeColour(parent.getValueTree());
+
 			if(!isSerialType() && pinPositions.childPositions.size() != connections.size())
 				return;
 
-			if(!dragRuler.isEmpty())
-			{
-				g.setColour(Colours::white.withAlpha(0.2f));
-				g.fillRoundedRectangle(dragRuler, 2.5f);
-			}
-			
 			const auto delta = (float)(Helpers::SignalHeight) / (float)numChannels;
 
 			auto xOffset = 10.0f;
@@ -356,7 +335,7 @@ struct ContainerComponent : public NodeComponent
 
 				if (!routeThroughChildNodes())
 				{
-					drawSignalCable(g, s.getCentre(), e.getCentre(), colour);
+					drawSignalCable(g, s.getCentre(), e.getCentre(), colour, true);
 				}
 			}
 
@@ -378,7 +357,7 @@ struct ContainerComponent : public NodeComponent
 					{
 						auto p1 = pinPositions.containerStart.translated(xOffset, 0.0f);
 						auto p2 = firstPos.first;
-						drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour);
+						drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour, false);
 						offset += delta;
 					}
 				}
@@ -394,7 +373,7 @@ struct ContainerComponent : public NodeComponent
 
 						for (int c = 0; c < numChannels; c++)
 						{
-							drawVerticalCable(g, p1.translated(offset, 0), p2.translated(offset, 0), colour);
+							drawSignalCable(g, p1.translated(offset, 0), p2.translated(offset, 0), colour, true);
 							offset += delta;
 						}
 					}
@@ -404,7 +383,7 @@ struct ContainerComponent : public NodeComponent
 
 						for (int c = 0; c < numChannels; c++)
 						{
-							drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour);
+							drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour, false);
 							offset += delta;
 						}
 					}
@@ -420,7 +399,7 @@ struct ContainerComponent : public NodeComponent
 					{
 						auto p1 = lastPos.second;
 						auto p2 = pinPositions.containerEnd;
-						drawSignalCable(g, p1.translated(0, offset), p2.translated(-xOffset, offset), colour);
+						drawSignalCable(g, p1.translated(0, offset), p2.translated(-xOffset, offset), colour, false);
 						offset += delta;
 					}
 				}
@@ -442,20 +421,17 @@ struct ContainerComponent : public NodeComponent
 						auto p2 = pinPositions.childPositions[i].first.translated(0, targetOffset);
 						auto p3 = pinPositions.childPositions[i].second.translated(0, targetOffset);
 						auto p4 = pinPositions.containerEnd.translated(-xOffset, offset);
-						drawSignalCable(g, p1, p2, colour);
-						drawSignalCable(g, p3, p4, colour);
+						drawSignalCable(g, p1, p2, colour, false);
+						drawSignalCable(g, p3, p4, colour, false);
 					}
 				}
 			}
 
 		}
 
-		Rectangle<float> dragRuler;
-
 		ContainerComponent& parent;
 		bool isForcedVertical = false;
 		ContainerType type;
-		Colour colour;
 		int numChannels = 0;
 		int numNodes = 0;
 		std::vector<MultiChannelConnection> connections;
@@ -508,11 +484,22 @@ struct ContainerComponent : public NodeComponent
 			Helpers::UIMode, 
 			VT_BIND_RECURSIVE_PROPERTY_LISTENER(onChildPositionUpdate));
 
+		auto gt = getValueTree().getOrCreateChildWithName(UIPropertyIds::Groups, um);
+		groupListener.setCallback(gt, Helpers::UIMode, VT_BIND_CHILD_LISTENER(onGroup));
+
 		nodeListener.handleUpdateNowIfNeeded();
 		resizeListener.handleUpdateNowIfNeeded();
+		groupListener.handleUpdateNowIfNeeded();
 
 		if(!Helpers::hasDefinedBounds(v))
-			setFixSize({});
+		{
+			Rectangle<int> nb(getPosition(), getPosition().translated(500, 100));
+
+			Helpers::updateBounds(getValueTree(), nb, um);
+			setSize(500, 100);
+			resized();
+			cables.updatePins(*this);
+		}
 
 		parameterDragger.onOffset({}, data[UIPropertyIds::ParameterYOffset]);
 
@@ -521,6 +508,56 @@ struct ContainerComponent : public NodeComponent
 		commentListener.setCallback(getValueTree(), { PropertyIds::Comment }, Helpers::UIMode, VT_BIND_RECURSIVE_PROPERTY_LISTENER(onCommentChange));
 
 		rebuildDescription();
+	}
+
+	struct Group
+	{
+		Group(ContainerComponent& parent_, const ValueTree& v_):
+		  name(v_[PropertyIds::ID].toString()),
+		  v(v_),
+		  parent(parent_)
+		{
+			auto list = v[PropertyIds::Value].toString();
+			idList = StringArray::fromTokens(list, ";", "");
+			idList.removeDuplicates(false);
+			idList.removeEmptyStrings();
+			idList.trim();
+		}
+
+		bool operator==(const ValueTree& other) const { return v == other; }
+
+		void draw(Graphics& g);
+
+		Rectangle<float> lastBounds;
+		ValueTree v;
+		ContainerComponent& parent;
+		String name;
+		StringArray idList;
+
+		JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Group);
+	};
+
+	OwnedArray<Group> groups;
+
+	void onGroup(const ValueTree& v, bool wasAdded)
+	{
+		if(wasAdded)
+		{
+			groups.add(new Group(*this, v));
+		}
+		else
+		{
+			for(auto g: groups)
+			{
+				if(*g == v)
+				{
+					groups.removeObject(g);
+					break;
+				}
+			}
+		}
+
+		repaint();
 	}
 
 	void rebuildDescription()
@@ -553,14 +590,8 @@ struct ContainerComponent : public NodeComponent
 					{
 						comments.add(new Comment(*this, cn));
 						Helpers::fixOverlap(getValueTree(), um, false);
+						comments.getLast()->showEditor();
 
-						Component::SafePointer<Comment> c = comments.getLast();
-						MessageManager::callAsync([c]()
-						{
-							if(c.getComponent() != nullptr)
-								c->showEditor();
-						});
-						
 						return;
 					}
 				}
@@ -615,10 +646,22 @@ struct ContainerComponent : public NodeComponent
 		{
 			if(Helpers::isProcessNode(v) || Helpers::isContainerNode(v))
 			{
-				SafeAsyncCall::call<ContainerComponent>(*this, [](ContainerComponent& c)
+				// only update cables when the nodes is not being dragged around...
+				for(auto cn: childNodes)
 				{
-					c.cables.updatePins(c);
-				});
+					if(cn->getValueTree() == v)
+					{
+						if(cn->getParentComponent() == this)
+						{
+							SafeAsyncCall::call<ContainerComponent>(*this, [](ContainerComponent& c)
+							{
+								c.cables.updatePins(c);
+							});
+						}
+
+						break;
+					}
+				}
 			}
 		}
 	}
@@ -645,6 +688,55 @@ struct ContainerComponent : public NodeComponent
 				cables.updatePins(*this);
 			});
 		}
+	}
+
+	void renameGroup(Point<float> position)
+	{
+		for (auto g : groups)
+		{
+			if (g->lastBounds.contains(position))
+			{
+				auto copy = g->lastBounds;
+
+				addAndMakeVisible(groupEditor = new TextEditor());
+				groupEditor->setBounds(copy.removeFromTop(20).toNearestInt());
+
+				GlobalHiseLookAndFeel::setTextEditorColours(*groupEditor);
+				groupEditor->getTextValue().referTo(g->v.getPropertyAsValue(PropertyIds::ID, um, false));
+				groupEditor->grabKeyboardFocusAsync();
+
+				groupEditor->onFocusLost = [this]()
+				{
+					groupEditor = nullptr;
+				};
+			}
+		}
+	}
+
+	ScopedPointer<TextEditor> groupEditor;
+
+	bool selectGroup(Point<float> position)
+	{
+		auto ok = false;
+
+		for(auto g: groups)
+		{
+			if(g->lastBounds.contains(position))
+			{
+				auto& selection = findParentComponentOfClass<Lasso>()->getLassoSelection();
+
+				for(auto cn: childNodes)
+				{
+					if(g->idList.contains(cn->getValueTree()[PropertyIds::ID].toString()))
+					{
+						selection.addToSelection(cn);
+						ok = true;
+					}
+				}
+			}
+		}
+
+		return ok;
 	}
 
 	ContainerComponent* getInnerContainer(Component* root, Point<int> rootPosition, Component* toSkip)
@@ -909,17 +1001,16 @@ struct ContainerComponent : public NodeComponent
 
 	struct AddButton: public Component
 	{
-		AddButton(ContainerComponent& parent_, int index_, Rectangle<int> hitzone):
+		AddButton(ContainerComponent& parent_, const Path& hitzone_, int index_):
 		  p(parent.createPath("add")),
 		  parent(parent_),
+		  hitzone(hitzone_),
 		  index(index_)
 		{
+			setBounds(hitzone.getBounds().toNearestInt());
+
+			hitzone.applyTransform(AffineTransform::translation(getPosition()).inverted());
 			parent.addAndMakeVisible(this);
-
-			auto pBounds = parent.getLocalBounds();
-			pBounds.removeFromTop(Helpers::HeaderHeight);
-
-			setBounds(hitzone.constrainedWithin(pBounds.reduced(10)));
 			toBack();
 			setRepaintsOnMouseActivity(true);
 		}
@@ -927,6 +1018,12 @@ struct ContainerComponent : public NodeComponent
 		~AddButton()
 		{
 			int x = 5;
+		}
+
+		bool hitTest(int x, int y) override
+		{
+			Point<float> pos((float)x, (float)y);
+			return hitzone.contains(pos);
 		}
 
 		void mouseDown(const MouseEvent& e) override
@@ -939,16 +1036,42 @@ struct ContainerComponent : public NodeComponent
 			SelectableComponent::Lasso::checkLassoEvent(e, SelectableComponent::LassoState::Drag);
 		}
 
+		int onNodeDrag(Point<float> lp)
+		{
+			auto prev = draggedOver;
+
+			draggedOver = contains(lp);
+
+			if(prev && !draggedOver)
+			{
+				int x = 5;
+			}
+
+			repaint();
+			return draggedOver ? index : -1;
+		}
+
+		bool draggedOver = false;
+
 		void mouseUp(const MouseEvent& e) override;
 		
 		void paint(Graphics& g) override
 		{
+			if(draggedOver)
+			{
+				g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.3f));
+				g.fillPath(hitzone);
+				g.setColour(Colour(SIGNAL_COLOUR));
+				g.strokePath(hitzone, PathStrokeType(1.0f));
+			}
+
 			if(active)
 			{
 				g.setColour(Colours::white.withAlpha(0.1f));
+				g.fillPath(hitzone);
+
+				g.setColour(Colours::white.withAlpha(0.4f));
 				g.fillPath(p);
-				auto b = getLocalBounds().withSizeKeepingCentre(3, getHeight()-5).toFloat();
-				g.fillRoundedRectangle(b, b.getWidth() * 0.5f);
 			}
 		}
 
@@ -965,15 +1088,19 @@ struct ContainerComponent : public NodeComponent
 
 		void resized() override 
 		{
-			auto b = getLocalBounds();
+			auto b = getLocalBounds().toFloat();
 
+			auto a = Rectangle<float>(b.getCentre(), b.getCentre()).withSizeKeepingCentre(12.0f, 12.0f);
 
-			parent.scalePath(p, b.removeFromTop(12).toFloat().translated(12.0f, 0.0f));
+			parent.scalePath(p, a);
 		}
 
 		ContainerComponent& parent;
 		
 		Path p;
+
+		Path hitzone;
+
 		const int index;
 	};
 
@@ -988,6 +1115,41 @@ struct ContainerComponent : public NodeComponent
 		}
 		
 		return nullptr;
+	}
+
+	static void expandParentsRecursive(Component& componentToShow, Rectangle<int> firstBoundsMightBeUnion, bool addMarginToFirst)
+	{
+		Component* c = &componentToShow;
+		auto pc = componentToShow.findParentComponentOfClass<ContainerComponent>();
+
+		while (pc != nullptr)
+		{
+			auto parentBounds = pc->getLocalBounds();
+			auto boundsInParent = c->getBoundsInParent();
+
+			auto first = c == &componentToShow;
+
+			if (first && !firstBoundsMightBeUnion.isEmpty())
+				boundsInParent = firstBoundsMightBeUnion;
+
+			auto w = boundsInParent.getRight();
+			auto h = boundsInParent.getBottom();
+
+			if(addMarginToFirst || !first)
+			{
+				w += Helpers::NodeMargin;
+				h += Helpers::NodeMargin;
+			}
+
+			w = jmax<int>(parentBounds.getWidth(), w);
+			h = jmax<int>(parentBounds.getHeight(), h);
+
+			pc->getValueTree().setProperty(UIPropertyIds::width, w, pc->um);
+			pc->getValueTree().setProperty(UIPropertyIds::height, h, pc->um);
+
+			c = pc;
+			pc = pc->findParentComponentOfClass<ContainerComponent>();
+		}
 	}
 
 	void rebuildOutsideParameters()
@@ -1026,6 +1188,30 @@ struct ContainerComponent : public NodeComponent
 			ResizableCornerComponent(c, nullptr)
 		{};
 
+		void paint(Graphics& g) override
+		{
+			Path p;
+			p.startNewSubPath(1.0, 0.0);
+			p.lineTo(1.0, 1.0);
+			p.lineTo(0.0, 1.0);
+			p.closeSubPath();
+
+			auto over = isMouseOver(true);
+
+			PathFactory::scalePath(p, getLocalBounds().toFloat().reduced(over ? 2.f : 3.0f));
+
+			auto c = Helpers::getNodeColour(findParentComponentOfClass<ContainerComponent>()->getValueTree());
+			g.setColour(c);
+			g.fillPath(p);
+		}
+
+		void mouseDrag(const MouseEvent& e) override
+		{
+			ResizableCornerComponent::mouseDrag(e);
+
+			expandParentsRecursive(*this, {}, false);
+		}
+
 		void mouseUp(const MouseEvent& e) override;
 	} resizer;
 	OwnedArray<NodeComponent> childNodes;
@@ -1040,6 +1226,8 @@ struct ContainerComponent : public NodeComponent
 	valuetree::RecursivePropertyListener commentListener;
 
 	valuetree::RecursivePropertyListener verticalListener;
+
+	valuetree::ChildListener groupListener;
 
 	AttributedString description;
 

@@ -72,7 +72,7 @@ void NodeComponent::HeaderComponent::mouseDrag(const MouseEvent& e)
 	if (Helpers::isRootNode(parent.getValueTree()))
 		return;
 
-	dragger.dragComponent(&parent, e, nullptr);
+	dragger.dragComponent(&parent, e, this);
 
 	auto thisBounds = parent.getBoundsInParent();
 
@@ -81,13 +81,19 @@ void NodeComponent::HeaderComponent::mouseDrag(const MouseEvent& e)
 
 	auto ls = findParentComponentOfClass<LassoSource<NodeComponent*>>();
 
-	for (auto s : selectionPositions)
+	Rectangle<int> selectionBounds = parent.getBoundsInParent();
+
+	for(auto s: selectionPositions)
 	{
 		auto nb = s.second.translated(deltaX, deltaY);
 		Helpers::updateBounds(s.first->getValueTree(), nb, parent.um);
+		selectionBounds = selectionBounds.getUnion(nb);
 	}
 
 	Helpers::updateBounds(parent.getValueTree(), parent.getBoundsInParent(), parent.um);
+
+	ContainerComponent::expandParentsRecursive(parent, selectionBounds, true);
+
 	parent.findParentComponentOfClass<Component>()->repaint();
 
 	auto root = findParentComponentOfClass<DspNetworkComponent>();
@@ -98,21 +104,13 @@ void NodeComponent::HeaderComponent::mouseDrag(const MouseEvent& e)
 		{
 			swapDrag = true;
 			
-			root->currentlyDraggedComponents.clear();
+			root->clearDraggedComponents();
 
 			for(auto s: root->getLassoSelection().getItemArray())
 			{
 				if(auto nc = dynamic_cast<NodeComponent*>(s.get()))
 				{
-					auto currentParent = nc->getParentComponent();
-					auto currentBounds = nc->getBoundsInParent();
-
-					root->currentlyDraggedComponents.add(nc);
-					currentParent->removeChildComponent(nc);
-					root->addChildComponent(nc);
-
-					auto rootBounds = root->getLocalArea(currentParent, currentBounds);
-					nc->setBounds(rootBounds);
+					root->setIsDragged(nc);
 				}
 			}
 
@@ -172,14 +170,9 @@ void NodeComponent::HeaderComponent::mouseUp(const MouseEvent& e)
 	{
 		swapDrag = false;
 
-		if(root->currentlyHoveredContainer != nullptr)
-		{
-			for (auto nc : root->currentlyDraggedComponents)
-			{
-				auto containerBounds = root->currentlyHoveredContainer->getLocalArea(root, nc->getBoundsInParent());
-				Helpers::updateBounds(nc->getValueTree(), containerBounds, parent.um);
-			}
-		}
+		root->resetDraggedBounds();
+
+		
 
 		if (root->currentlyHoveredContainer != nullptr)
 		{
@@ -198,7 +191,8 @@ void NodeComponent::HeaderComponent::mouseUp(const MouseEvent& e)
 
 				root->currentlyHoveredContainer->cables.dragPosition = {};
 				root->currentlyHoveredContainer = nullptr;
-				root->currentlyDraggedComponents.clear();
+
+				root->clearDraggedComponents();
 
 				std::vector<ValueTree> nodesToMove;
 
@@ -226,7 +220,7 @@ void NodeComponent::HeaderComponent::mouseUp(const MouseEvent& e)
 			}
 		}
 
-		root->currentlyDraggedComponents.clear();
+		root->clearDraggedComponents();
 
 		root->removeChildComponent(&parent);
 		originalParent->addChildComponent(&parent);
@@ -247,5 +241,47 @@ void NodeComponent::HeaderComponent::mouseUp(const MouseEvent& e)
 	root->rebuildCables();
 }
 
+
+void SelectableComponent::Lasso::groupSelection()
+{
+	if (selection.getNumSelected() == 0)
+		return;
+
+	auto sc = dynamic_cast<Component*>(selection.getSelectedItem(0).get());
+
+	auto container = sc->findParentComponentOfClass<ContainerComponent>();
+
+	auto groupTree = container->getValueTree().getOrCreateChildWithName(UIPropertyIds::Groups, &um);
+
+	StringArray sa;
+
+	for (auto n : selection.getItemArray())
+	{
+		if (n != nullptr)
+		{
+			auto id = n->getValueTree()[PropertyIds::ID].toString();
+
+			if (id.isNotEmpty())
+				sa.add(id);
+				
+		}
+	}
+
+	sa.sort(false);
+
+	auto s = sa.joinIntoString(";");
+
+	auto existingGroup = groupTree.getChildWithProperty(PropertyIds::Value, s);
+
+	if (existingGroup.isValid())
+		groupTree.removeChild(existingGroup, &um);
+	else
+	{
+		ValueTree ng(UIPropertyIds::Group);
+		ng.setProperty(PropertyIds::ID, "GROUP", nullptr);
+		ng.setProperty(PropertyIds::Value, s, nullptr);
+		groupTree.addChild(ng, -1, &um);
+	}
+}
 
 }

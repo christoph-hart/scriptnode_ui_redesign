@@ -51,14 +51,24 @@ struct SelectableComponent: public ChangeListener
 	};
 
 	struct Lasso : public juce::LassoSource<WeakPtr>,
-		public Timer
+				   public Timer,
+				   public ChangeListener
 	{
 		Lasso()
 		{
 			startTimer(500);
+			selection.addChangeListener(this);
 		}
 
-		virtual ~Lasso() {};
+		virtual ~Lasso() 
+		{
+			selection.removeChangeListener(this);
+		};
+
+		void changeListenerCallback(ChangeBroadcaster* cb) override
+		{
+			cleanupSelection();
+		}
 
 		void forEach(const Array<ValueTree>& nodes, const std::function<void(SelectableComponent*)>& f)
 		{
@@ -135,6 +145,23 @@ struct SelectableComponent: public ChangeListener
 
 		Array<ValueTree> clipboard;
 
+		void colourSelection()
+		{
+			auto c = Colours::red.withHue(Random::getSystemRandom().nextFloat());
+			c = c.withBrightness(0.7f);
+			c = c.withSaturation(0.5f);
+
+			for(auto s: selection.getItemArray())
+			{
+				auto vt = s->getValueTree();
+
+				if(vt.getType() == PropertyIds::Node)
+				{
+					vt.setProperty(PropertyIds::NodeColour, c.getARGB(), &um);
+				}
+			}
+		}
+
 		Result copySelection()
 		{
 			clipboard.clear();
@@ -200,18 +227,48 @@ struct SelectableComponent: public ChangeListener
 				deltaY = startPoint.getY() - positions.getBounds().getY();
 			}
 
+			auto rootTree = valuetree::Helpers::findParentWithType(list[0], PropertyIds::Network);
+
 			Array<ValueTree> newTrees;
 
 			for (auto& n : list)
 			{
 				auto copy = n.createCopy();
+
+				auto n = Helpers::getHeaderTitle(copy);
+
+				copy.setProperty(PropertyIds::Name, n, nullptr);
+				auto newId = Helpers::getUniqueId(copy[PropertyIds::ID].toString(), rootTree);
+				copy.setProperty(PropertyIds::ID, newId, nullptr);
+
 				Helpers::translatePosition(copy, { deltaX, deltaY }, nullptr);
 				container.getChildWithName(PropertyIds::Nodes).addChild(copy, insertIndex++, &um);
 				newTrees.add(copy);
 			}
 
-			Helpers::fixOverlap(container, &um, false);
-			setSelection(newTrees);
+			Helpers::fixOverlap(rootTree.getChildWithName(PropertyIds::Node), &um, false);
+
+			MessageManager::callAsync([newTrees, this]()
+			{
+				setSelection(newTrees);
+
+				auto asC = dynamic_cast<Component*>(this);
+
+				auto zp = asC->findParentComponentOfClass<ZoomableViewport>();
+
+				RectangleList<int> all;
+
+				for(auto& s: selection.getItemArray())
+				{
+					auto sc = dynamic_cast<Component*>(s.get());
+
+					if(sc != nullptr)
+						all.addWithoutMerging(asC->getLocalArea(sc, sc->getLocalBounds()));
+				}
+
+				zp->scrollToRectangle(all.getBounds(), true, true);
+			});
+
 			return Result::ok();
 		}
 
@@ -219,6 +276,8 @@ struct SelectableComponent: public ChangeListener
 		{
 			return create(clipboard, startPoint);
 		}
+
+		void groupSelection();
 
 		Result duplicateSelection()
 		{
@@ -238,9 +297,37 @@ struct SelectableComponent: public ChangeListener
 			return selection;
 		}
 
+		void cleanupSelection()
+		{
+			auto currentSelection = selection.getItemArray();
+
+			for(auto& s: currentSelection)
+			{
+				if(s.get() == nullptr)
+					selection.deselect(s);
+			}
+
+			for(auto& s: currentSelection)
+			{
+				auto thisType = s->getValueTree().getType();
+
+				for(auto other: currentSelection)
+				{
+					if((other->getValueTree().getType() == thisType) &&
+						s->getValueTree().isAChildOf(other->getValueTree()))
+					{
+						selection.deselect(other);
+						break;
+					}
+				}
+			}
+		}
+
 		UndoManager um;
 		juce::LassoComponent<SelectableComponent::WeakPtr> lasso;
 		Selection selection;
+
+		scriptnode::NodeDatabase db;
 	};
 
 	SelectableComponent(Lasso& l):
@@ -265,7 +352,11 @@ struct SelectableComponent: public ChangeListener
 		if (isSelected != selected)
 		{
 			selected = isSelected;
-			dynamic_cast<Component*>(this)->repaint();
+
+			auto c = dynamic_cast<Component*>(this);
+
+			if(auto p = c->getParentComponent())
+				p->repaint(c->getBoundsInParent().expanded(10));
 		}
 	}
 
@@ -281,7 +372,8 @@ struct NodeComponent : public Component,
 	public SelectableComponent,
 	public PathFactory
 {
-	struct HeaderComponent : public CablePinBase
+	struct HeaderComponent : public CablePinBase,
+							 public ComponentBoundsConstrainer
 	{
 		HeaderComponent(NodeComponent& parent_, const ValueTree& v, UndoManager* um_) :
 			CablePinBase(v, um_),
@@ -321,6 +413,19 @@ struct NodeComponent : public Component,
 
 		Helpers::ConnectionType getConnectionType() const override { return Helpers::ConnectionType::Bypassed; };
 
+		void checkBounds (Rectangle<int>& bounds, const Rectangle<int>&, const Rectangle<int>&, bool, bool, bool,bool ) override
+		{
+			auto minX = Helpers::ParameterWidth + Helpers::NodeMargin;
+			auto minY = Helpers::HeaderHeight + 10;
+
+			auto offsetX = 0;
+			auto offsetY = 0;
+
+			Rectangle<int> possible(minX + offsetY, minY + offsetY, 10000000, 10000000);
+
+			bounds = bounds.constrainedWithin(possible);
+		}
+
 		bool matchesConnectionType(Helpers::ConnectionType ct) const override
 		{
 			return ct == Helpers::ConnectionType::Parameter;
@@ -356,7 +461,11 @@ struct NodeComponent : public Component,
 			auto b = getLocalBounds().toFloat();
 			g.setColour(Helpers::getNodeColour(parent.getValueTree()));
 			g.fillRect(b);
+			g.setColour(Colours::white.withAlpha(0.1f));
+			g.fillRect(getLocalBounds().removeFromTop(1));
 			g.setColour(Colours::white);
+
+			
 
 			if (powerButton.isVisible())
 				b.removeFromLeft(getHeight());
@@ -417,11 +526,18 @@ struct NodeComponent : public Component,
 		for (auto st : data.getChildWithName(PropertyIds::SwitchTargets))
 			addAndMakeVisible(modOutputs.add(new ModOutputComponent(st, um)));
 
+		colourListener.setCallback(data, { PropertyIds::NodeColour }, Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onColour));
+
 		resized();
 	};
 
 	virtual ~NodeComponent() = default;
 	
+	void onColour(const Identifier&, const var&)
+	{
+		repaint();
+		header.repaint();
+	}
 
 	Path createPath(const String& url) const override
 	{
@@ -477,7 +593,7 @@ struct NodeComponent : public Component,
 		for (auto p: parameters)
 		{
 			pb.removeFromTop(Helpers::ParameterMargin);
-			p->setBounds(pb.removeFromTop(Helpers::ParameterHeight));
+			p->setBounds(pb.removeFromTop(getParameterHeight()));
 		}
 
 		for (auto m : modOutputs)
@@ -486,18 +602,11 @@ struct NodeComponent : public Component,
 		}
 	}
 
-	void paintOverChildren(Graphics& g) override
-	{
-		if (selected)
-		{
-			g.setColour(Colour(SIGNAL_COLOUR));
-			g.drawRect(getLocalBounds(), 1);
-		}
-	}
-
 	ValueTree getValueTree() const override { return data; }
 
 	const bool hasSignal;
+
+	int getParameterHeight() const { return Helpers::ParameterHeight; }
 
 	void setFixSize(Rectangle<int> extraBounds)
 	{
@@ -506,12 +615,13 @@ struct NodeComponent : public Component,
 		if (!parameters.isEmpty())
 			x += Helpers::ParameterMargin + Helpers::ParameterWidth;
 
-		x += extraBounds.getWidth();
+		int y = Helpers::HeaderHeight;
+
+		if(!hasSignal)
+			x += extraBounds.getWidth();
 
 		if (!modOutputs.isEmpty())
 			x += Helpers::ParameterWidth;
-
-		int y = Helpers::HeaderHeight;
 
 		if (Helpers::hasRoutableSignal(getValueTree()))
 			y += Helpers::SignalHeight;
@@ -519,9 +629,19 @@ struct NodeComponent : public Component,
 		if (hasSignal)
 			y += Helpers::SignalHeight;
 
-		auto bodyHeight = jmax(extraBounds.getHeight(), parameters.size() * (Helpers::ParameterMargin + Helpers::ParameterHeight), modOutputs.size() * 24);
+		int bodyHeight = 0;
+
+		auto parameterHeight = jmax(parameters.size() * (Helpers::ParameterMargin + getParameterHeight()), modOutputs.size() * 24) + Helpers::ParameterMargin;
+
+		if(hasSignal)
+			bodyHeight = extraBounds.getHeight() + parameterHeight;
+		else
+			bodyHeight = jmax(extraBounds.getHeight(), parameterHeight);
 
 		x = jmax(x, GLOBAL_FONT().getStringWidth(Helpers::getHeaderTitle(getValueTree())) + 20 + 2 * Helpers::HeaderHeight);
+
+		if(hasSignal)
+			x = jmax(x, extraBounds.getWidth());
 
 		Rectangle<int> nb(getPosition(), getPosition().translated(x, y + bodyHeight));
 
@@ -549,6 +669,8 @@ struct NodeComponent : public Component,
 	ParameterComponent* getParameter(int index) const { return parameters[index]; }
 	int getNumParameters() const { return parameters.size(); }
 
+	WeakReference<CablePinBase> getFirstModOutput() { return modOutputs.getFirst(); }
+
 protected:
 
 	
@@ -561,6 +683,7 @@ protected:
 
 	valuetree::PropertyListener positionListener;
 	valuetree::PropertyListener foldListener;
+	valuetree::PropertyListener colourListener;
 
 	HeaderComponent header;
 };

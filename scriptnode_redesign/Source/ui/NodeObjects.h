@@ -110,6 +110,8 @@ struct ProcessNodeComponent : public NodeComponent
 		if (Helpers::hasRoutableSignal(v))
 			addAndMakeVisible(routableSignal = new RoutableSignalComponent(*this));
 
+		setOpaque(true);
+
 		dummyBody = DummyBody::createDummyComponent(v[PropertyIds::FactoryPath].toString());
 
 		if (dummyBody != nullptr)
@@ -141,9 +143,7 @@ struct ProcessNodeComponent : public NodeComponent
 			b.removeFromBottom(1.0f);
 		}
 
-		auto container = valuetree::Helpers::findParentWithType(getValueTree(), PropertyIds::Node);
-
-		auto cl = Helpers::getNodeColour(container);
+		auto cl = Helpers::getNodeColour(getValueTree());
 
 		
 
@@ -182,13 +182,20 @@ struct ProcessNodeComponent : public NodeComponent
 			if (hasSignal)
 				b.removeFromTop(Helpers::SignalHeight);
 
-			if (!parameters.isEmpty())
-				b.removeFromLeft(Helpers::ParameterMargin + Helpers::ParameterWidth);
+			dummyBody->setTopLeftPosition(b.getTopLeft());
 
-			if (!modOutputs.isEmpty())
-				b.removeFromRight(Helpers::ParameterWidth);
+			b.removeFromTop(dummyBody->getHeight());
 
-			dummyBody->setTopLeftPosition(b.getPosition());
+			for(auto p: parameters)
+			{
+				p->setTopLeftPosition(p->getPosition().translated(0, dummyBody->getHeight()));
+			}
+
+			for (auto m: modOutputs)
+			{
+				m->setTopLeftPosition(m->getPosition().translated(0, dummyBody->getHeight()));
+			}
+
 		}
 
 		cables.clear();
@@ -228,6 +235,8 @@ struct NoProcessNodeComponent : public NodeComponent
 	NoProcessNodeComponent(Lasso& l, const ValueTree& v, UndoManager* um_) :
 		NodeComponent(l, v, um_, false)
 	{
+		setOpaque(true);
+
 		dummyBody = DummyBody::createDummyComponent(v[PropertyIds::FactoryPath].toString());
 
 		if (dummyBody != nullptr)

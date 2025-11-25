@@ -61,6 +61,9 @@ DECLARE_ID(ParameterYOffset);
 DECLARE_ID(CommentWidth);
 DECLARE_ID(CommentOffsetX);
 DECLARE_ID(CommentOffsetY);
+DECLARE_ID(CableOffset);
+DECLARE_ID(Groups);
+DECLARE_ID(Group);
 #undef DECLARE_ID
 
 struct Helpers
@@ -122,7 +125,7 @@ struct Helpers
 	static constexpr int NodeMargin = 50;
 	static constexpr int ParameterHeight = 32;
 	static constexpr int ParameterWidth = 128;
-	static constexpr int ParameterMargin = 10;
+	static constexpr int ParameterMargin = 5;
 
 	static constexpr valuetree::AsyncMode UIMode = valuetree::AsyncMode::Asynchronously;
 
@@ -130,26 +133,93 @@ struct Helpers
 
 	static var getNodeProperty(const ValueTree& v, const Identifier& id, const var& defaultValue);
 
+	static String getUniqueId(const String& prefix, const ValueTree& rootTree);
+
 	static void setNodeProperty(ValueTree& v, const Identifier& propertyName, const var& value, UndoManager* um);
+
+	static Colour getFadeColour(int index, int numPaths)
+	{
+		if (numPaths == 0)
+			return Colours::transparentBlack;
+
+		auto hue = (float)index / (float)numPaths;
+
+		auto saturation = JUCE_LIVE_CONSTANT_OFF(0.3f);
+		auto brightness = JUCE_LIVE_CONSTANT_OFF(1.0f);
+		auto minHue = JUCE_LIVE_CONSTANT_OFF(0.2f);
+		auto maxHue = JUCE_LIVE_CONSTANT_OFF(0.8f);
+		auto alpha = JUCE_LIVE_CONSTANT_OFF(0.4f);
+
+		hue = jmap(hue, minHue, maxHue);
+
+		return Colour::fromHSV(hue, saturation, brightness, alpha);
+	}
 
 	static Path createPinHole();
 
-	static void createCurve(Path& path, Point<float> start, Point<float> end, Point<float> velocity, bool useCubic)
+	static void createCustomizableCurve(Path& path, Point<float> start, Point<float> end, float offset)
 	{
 		float dx = end.x - start.x;
-		float absDx = std::abs(dx);
+		float dy = end.y - start.y;
 
-		// Minimum outward bend when wiring backward
-		float minOffset = JUCE_LIVE_CONSTANT_OFF(80.0f);
+		if(dx < 0.0f)
+		{
+			offset = jlimit(-1.0f, 1.0f, offset);
+			offset *= dy * 0.5;
 
-		// Use half-distance going forward, otherwise give it some breathing room
-		float controlOffsetX = dx > minOffset ? absDx * 0.5f : 20.0f;
+			auto cx1 = start.translated(15.0f, 0.0f);
+			auto cx2 = end.translated(-15.0f, 0.0f);
 
-		// Control points (bend horizontally)
-		juce::Point<float> cp1(start.x + controlOffsetX, start.y);
-		juce::Point<float> cp2(end.x - controlOffsetX, end.y);
+			auto mid1 = cx1.translated(0.0f, offset + dy * 0.5f);
+			auto mid2 = cx2.translated(0.0f, offset + dy * -0.5f);
 
-		path.cubicTo(cp1, cp2, end);
+			path.startNewSubPath(start);
+			path.lineTo(cx1);
+			path.lineTo(mid1);
+			path.lineTo(mid2);
+			path.lineTo(cx2);
+			path.lineTo(end);
+
+			path = path.createPathWithRoundedCorners(10);
+		}
+		else
+		{
+			offset = jlimit(-0.5f, 0.5f, offset);
+			offset *= dx;
+			auto midX = start.x + dx * 0.5f + offset;
+
+			const auto ARC = jmin(std::abs(dy * 0.5f), 10.0f);
+
+			float sign = end.y > start.y ? 1.0f : -1.0f;
+
+			path.startNewSubPath(start);
+			path.lineTo(midX - ARC, start.y);
+			path.quadraticTo(midX, start.y, midX, start.y + ARC * sign);
+			path.lineTo(midX, end.y - ARC * sign);
+			path.quadraticTo(midX, end.y, midX + ARC, end.y);
+			path.lineTo(end);
+		}
+	}
+
+	static void createCurve(Path& path, Point<float> start, Point<float> end, bool preferLines)
+	{
+		
+		float dx = end.x - start.x;
+		float dy = end.y - start.y;
+
+		if(preferLines)
+		{
+			path.lineTo(end);
+		}
+		else
+		{
+			float controlOffsetX = dx * 0.5f;
+
+			juce::Point<float> cp1(start.x + controlOffsetX, start.y);
+			juce::Point<float> cp2(end.x - controlOffsetX, end.y);
+
+			path.cubicTo(cp1, cp2, end);
+		}
 	}
 
 	static bool hasRoutableSignal(const ValueTree& v);
@@ -180,6 +250,9 @@ struct Helpers
 	{
 		if(p.getType() == PropertyIds::Node)
 			return getNodeColour(p);
+
+		if(p.getType() == PropertyIds::ModulationTargets || p.getType() == PropertyIds::SwitchTargets)
+			return getNodeColour(valuetree::Helpers::findParentWithType(p, PropertyIds::Node));
 
 		auto c = (int64)p[PropertyIds::NodeColour];
 
@@ -235,38 +308,27 @@ struct Helpers
 
 	static void fixOverlapRecursive(ValueTree& node, UndoManager* um, bool sortProcessNodesFirst);
 
-	static void updateChannelRecursive(ValueTree& v, int numChannels, UndoManager* um)
-	{
-		jassert(v.getType() == PropertyIds::Node);
+	static void updateChannelRecursive(ValueTree& v, int numChannels, UndoManager* um);
 
-		auto path = getFactoryPath(v);
-
-		auto isMulti = path.second == "multi";
-		auto isSideChain = path.second == "sidechain";
-		auto isModChain = path.second == "modchain";
-
-		if (isSideChain)
-			numChannels *= 2;
-
-		if(isModChain)
-			numChannels = 1;
-
-		v.setProperty(PropertyIds::CompileChannelAmount, numChannels, um);
-
-		auto childNodes = v.getChildWithName(PropertyIds::Nodes);
-
-		if(isMulti)
-			numChannels /= childNodes.getNumChildren();
-		
-
-		for (auto cn : childNodes)
-		{
-			updateChannelRecursive(cn, numChannels, um);
-		}
-	}
-
-public:
-	
 };
+
+struct DataBaseHelpers
+{
+	static bool isSignalNode(const ValueTree& v)
+	{
+		auto p = v[PropertyIds::FactoryPath].toString();
+
+		NodeDatabase db;
+		
+		if(auto obj = db.getProperties(p))
+		{
+			return obj->getProperty(PropertyIds::AddToSignal);
+		}
+
+		return false;
+	}
+};
+
+
 
 }

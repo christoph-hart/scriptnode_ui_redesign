@@ -60,10 +60,11 @@ struct CableBase: public Component
 		e = getLocalPoint(parent, e);
 
 		p.clear();
-		p.startNewSubPath(s);
-		Helpers::createCurve(p, s, e.translated(-3.0f, 0.0f), { 0.0f, 0.0f }, true);
+		Helpers::createCustomizableCurve(p, s, e.translated(-3.0f, 0.0f), offset);
 		repaint();
 	}
+
+	
 
 	void paint(Graphics& g) override
 	{
@@ -85,17 +86,55 @@ struct CableBase: public Component
 	Path p;
 	bool over = false;
 	Point<float> s, e;
+
+	float offset = 0.0f;
+	float width = 0.333f;
+
 	Colour colour1;
 	Colour colour2;
 };
 
 struct DraggedCable: public CableBase
 {
+	
+
 	DraggedCable(CablePinBase* src_):
 	  src(src_)
 	{
 		colour1 = Colour(SIGNAL_COLOUR);
 		colour2 = colour1;
+	}
+
+	~DraggedCable();
+
+	void paint(Graphics& g) override
+	{
+		CableBase::paint(g);
+
+		String t;
+		
+		if(hoveredPin != nullptr)
+		{
+			t = "Connect to " + hoveredPin->getTargetParameterId();
+		}
+		else
+		{
+			t = "Create new parameter node";
+		}
+
+		auto f = GLOBAL_FONT();
+		auto w = f.getStringWidth(t) + 20.0f;
+
+		if(t.isNotEmpty())
+		{
+			auto b = Rectangle<float>(e, e).withSizeKeepingCentre(w, 20.0f).translated(-w * 0.5 - 20.0f, 0.0f);
+
+			g.setColour(Colour(0xFF222222).withAlpha(0.7f));
+			g.fillRoundedRectangle(b, 3.0f);
+			g.setFont(f);
+			g.setColour(Colours::white.withAlpha(0.7f));
+			g.drawText(t, b, Justification::centred);
+		}
 	}
 
 	void setTargetPosition(Point<int> rootPosition);
@@ -231,6 +270,11 @@ struct CableComponent : public CableBase,
 		dst(dst_),
 		connectionTree(getConnectionTree(src_, dst_))
 	{
+		// TODO: Make better cable design functions (add curve points etc...)
+		// drag upwards to make the cable more rectangly
+		// drag left / right to move the center point
+		// two properties for <Connection x="0.5", y="0.5">
+
 		auto ids = UIPropertyIds::Helpers::getPositionIds();
 		ids.add(PropertyIds::Folded);
 
@@ -243,6 +287,8 @@ struct CableComponent : public CableBase,
 		setInterceptsMouseClicks(false, false);
 		setRepaintsOnMouseActivity(true);
 
+		cableOffsetListener.setCallback(connectionTree, { UIPropertyIds::CableOffset }, Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onCableOffset));
+
 		removeListener.setCallback(connectionTree, Helpers::UIMode, true, [this](const ValueTree& v)
 		{
 			auto ch = findParentComponentOfClass<CableHolder>();
@@ -251,6 +297,18 @@ struct CableComponent : public CableBase,
 	}
 
 	ValueTree connectionTree;
+
+	void onCableOffset(const Identifier&, const var& newValue)
+	{
+		offset = (float)newValue;
+
+		auto p = getParentComponent();
+
+		if(p != nullptr)
+		{
+			rebuildPath(p->getLocalPoint(this, s), p->getLocalPoint(this, e), getParentComponent());
+		}
+	}
 
 	ValueTree getValueTree() const
 	{
@@ -298,7 +356,7 @@ struct CableComponent : public CableBase,
 			auto end = parent->getLocalArea(dst, dst->getLocalBounds()).toFloat();
 			auto ne = Point<float>(end.getX(), end.getCentreY());
 			
-			rebuildPath(ns, ne, parent);
+			rebuildPath(ns, ne.translated(-1.0f * (float)Helpers::ParameterMargin, 0.0f), parent);
 		}
 	}
 
@@ -306,13 +364,45 @@ struct CableComponent : public CableBase,
 	{
 		if(selected)
 		{
-			g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.4f));
-			g.strokePath(p, PathStrokeType(3));
+			Path tp;
+			PathStrokeType(4.0f).createStrokedPath(tp, p);
+
+			g.setColour(Colour(SIGNAL_COLOUR));
+			g.strokePath(tp, PathStrokeType(1));
 		}
+	}
+
+	float downOffset = 0.0f;
+
+	void mouseDrag(const MouseEvent& ev) override
+	{
+		auto deltaX = (float)ev.getDistanceFromDragStartX() / (float)getWidth();
+		auto deltaY = (float)ev.getDistanceFromDragStartY() / (float)getHeight();
+
+		if(e.getX() < s.getX())
+		{
+			if (s.getY() > e.getY())
+				deltaY *= -1.0f;
+
+			offset = jlimit(-1.0f, 1.0f, downOffset + deltaY);
+		}
+		else
+			offset = jlimit(-0.5f, 0.5f, downOffset + deltaX);
+
+		connectionTree.setProperty(UIPropertyIds::CableOffset, offset, src->um);
+	}
+
+	void mouseEnter(const MouseEvent& ev)
+	{
+		auto vertical = e.getX() < s.getX();
+
+		setMouseCursor(vertical ? MouseCursor::UpDownResizeCursor : MouseCursor::LeftRightResizeCursor);
 	}
 
 	void mouseDown(const MouseEvent& e) override
 	{
+		downOffset = offset;
+
 		auto s = findParentComponentOfClass<SelectableComponent::Lasso>();
 		s->getLassoSelection().addToSelectionBasedOnModifiers(this, e.mods);
 	}
@@ -335,6 +425,7 @@ struct CableComponent : public CableBase,
 
 	valuetree::PropertyListener sourceListener;
 	valuetree::PropertyListener targetListener;
+	valuetree::PropertyListener cableOffsetListener;
 
 	valuetree::RemoveListener removeListener;
 };
@@ -352,14 +443,17 @@ struct DspNetworkComponent : public Component,
 		Paste,
 		Duplicate,
 		Delete,
+		CreateNew,
 		ToggleVertical,
 		ToggleEdit,
 		AddComment,
+		GroupSelection,
 		Undo,
 		Redo,
 		AutoLayout,
 		AlignTop,
 		AlignLeft,
+		SetColour,
 		DistributeHorizontally,
 		DistributeVertically,
 		numActions
@@ -439,10 +533,17 @@ struct DspNetworkComponent : public Component,
 
 		if(editMode)
 			GlobalHiseLookAndFeel::draw1PixelGrid(g, this, getLocalBounds());
+
+		if(!currentBuildPath.isEmpty())
+		{
+			g.setColour(Colour(SIGNAL_COLOUR));
+			g.strokePath(currentBuildPath, PathStrokeType(1.0f));
+			g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.1f));
+			g.fillPath(currentBuildPath);
+		}
 	}
 
-	Array<Component::SafePointer<NodeComponent>> currentlyDraggedComponents;
-	Component::SafePointer<ContainerComponent> currentlyHoveredContainer;
+	bool createSignalNodes = true;
 
 	Point<int> pos;
 
@@ -454,6 +555,8 @@ struct DspNetworkComponent : public Component,
 	void mouseDown(const MouseEvent& e) override
 	{
 		CHECK_MIDDLE_MOUSE_DOWN(e);
+
+		currentCreateNodePopup = nullptr;
 
 		checkLassoEvent(e, SelectableComponent::LassoState::Down);
 	}
@@ -468,6 +571,15 @@ struct DspNetworkComponent : public Component,
 		checkLassoEvent(e, SelectableComponent::LassoState::Drag);
 	}
 
+	void mouseDoubleClick(const MouseEvent& e) override
+	{
+		if (auto c = rootComponent->getInnerContainer(this, e.getPosition(), nullptr))
+		{
+			auto pos = c->getLocalPoint(this, e.position);
+			c->renameGroup(pos);
+		}
+	}
+
 	void mouseUp(const MouseEvent& e) override
 	{
 		CHECK_MIDDLE_MOUSE_UP(e);
@@ -478,7 +590,20 @@ struct DspNetworkComponent : public Component,
 		checkLassoEvent(e, SelectableComponent::LassoState::Up);
 
 		if (!e.mouseWasDraggedSinceMouseDown())
-			selection.deselectAll();
+		{
+			if (auto c = rootComponent->getInnerContainer(this, e.getPosition(), nullptr))
+			{
+				auto pos = c->getLocalPoint(this, e.position);
+
+				if(!e.mods.isCommandDown())
+					selection.deselectAll();
+
+				if(c->selectGroup(pos))
+					return;
+			}
+
+			selection.deselectAll();	
+		}
 	}
 
 	bool editMode = false;
@@ -504,6 +629,9 @@ struct DspNetworkComponent : public Component,
 		case Action::Copy:
 			copySelection();
 			return true;
+		case Action::SetColour:
+			colourSelection();
+			return true;
 		case Action::Paste:
 		{
 			auto currentContainer = rootComponent->getInnerContainer(this, pos, nullptr);
@@ -513,6 +641,9 @@ struct DspNetworkComponent : public Component,
 		}
 		case Action::Duplicate:
 			duplicateSelection();
+			return true;
+		case Action::GroupSelection:
+			groupSelection();
 			return true;
 		case Action::Delete:
 			deleteSelection();
@@ -524,12 +655,81 @@ struct DspNetworkComponent : public Component,
 		case Action::ToggleEdit:
 			toggleEditMode();
 			return true;
+		case Action::CreateNew:
+		{
+			if(auto first = selection.getItemArray().getFirst())
+			{
+				if(auto nc = dynamic_cast<NodeComponent*>(first.get()))
+				{
+					BuildHelpers::CreateData cd;
+
+					Path buildPath;
+
+					Point<int> pos;
+
+					if(auto c = dynamic_cast<ContainerComponent*>(nc))
+					{
+						cd.containerToInsert = c->getValueTree();
+						cd.pointInContainer = {};
+						cd.signalIndex = c->childNodes.size();
+
+						if(auto ab = c->addButtons.getLast())
+						{
+							buildPath = ab->hitzone;
+							pos = getLocalPoint(ab, Point<int>());
+							buildPath.applyTransform(AffineTransform::translation(pos.toFloat()));
+						}
+					}
+					else
+					{
+						auto container = nc->findParentComponentOfClass<ContainerComponent>();
+
+						cd.containerToInsert = container->getValueTree();
+						cd.pointInContainer = nc->getBoundsInParent().getTopRight().translated(Helpers::NodeMargin / 2, 0);
+
+						pos = getLocalPoint(container, cd.pointInContainer);
+
+						findParentComponentOfClass<ZoomableViewport>()->scrollToRectangle(Rectangle<int>(pos, pos).withSizeKeepingCentre(400, 32), true);
+
+						if (nc->hasSignal)
+						{
+							cd.signalIndex = nc->getValueTree().getParent().indexOf(nc->getValueTree()) + 1;
+
+							if (auto ab = container->addButtons[cd.signalIndex])
+							{
+								buildPath = ab->hitzone;
+
+								auto pos = getLocalPoint(ab, Point<float>());
+								buildPath.applyTransform(AffineTransform::translation(pos));
+							}
+						}
+						else
+						{
+							cd.source = nc->getFirstModOutput();
+						}
+					}
+
+					showCreateNodePopup(pos, buildPath, cd);
+				}
+			}
+
+			return true;
+		}
 		case Action::AddComment:
 
 			for (auto s : selection.getItemArray())
 			{
+				String t = "Add comment...";
+
 				if (s != nullptr && s->isNode())
-					s->getValueTree().setProperty(PropertyIds::Comment, "Add comment...", &um);
+				{
+					auto desc = db.getDescriptions()[s->getValueTree()[PropertyIds::FactoryPath]];
+
+					if(desc.isNotEmpty())
+						t = desc;
+				}
+				
+				s->getValueTree().setProperty(PropertyIds::Comment, t, &um);
 			}
 
 			return true;
@@ -587,8 +787,12 @@ struct DspNetworkComponent : public Component,
 			return performAction(Action::AutoLayout);
 		if (k.getKeyCode() == 'Y' && k.getModifiers().isCommandDown())
 			return performAction(Action::Redo);
+		if (k.getKeyCode() == 'G' && k.getModifiers().isCommandDown())
+			return performAction(Action::GroupSelection);
 		if (k.getKeyCode() == KeyPress::deleteKey)
 			return performAction(Action::Delete);
+		if(k.getKeyCode() == 'N')
+			return performAction(Action::CreateNew);
 
 		return false;
 	}
@@ -634,12 +838,345 @@ struct DspNetworkComponent : public Component,
 		});
 	}
 
+	struct CreateNodePopup: public Component,
+							public TextEditorWithAutocompleteComponent,
+							public ZoomableViewport::ZoomListener
+	{
+		struct Laf: public GlobalHiseLookAndFeel
+		{
+			void drawButtonBackground(Graphics& g, Button& b, const Colour& backgroundColour, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
+			{
+				Rectangle<float> r = b.getLocalBounds().toFloat().reduced(1.0f);
+
+				Path p;
+
+				auto f = b.getConnectedEdgeFlags();
+
+				auto left = (f & Button::ConnectedOnLeft) != 0;
+				auto right = (f & Button::ConnectedOnRight) != 0;
+
+				p.addRoundedRectangle(r.getX(), r.getY(), r.getWidth(), r.getHeight(), r.getHeight() / 2.0f, r.getHeight() * 0.5f, !right, !left, !right, !left);
+				g.setColour(b.findColour(TextButton::ColourIds::buttonColourId).withAlpha(1.0f));
+
+				if(b.getToggleState())
+					g.fillPath(p);
+				else
+					g.strokePath(p, PathStrokeType(1.0f));
+			}
+
+			void drawButtonText(Graphics &g, TextButton &button, bool , bool ) override
+			{
+				g.setColour(button.getToggleState() ? Colour(0xAA111111) : button.findColour(TextButton::ColourIds::buttonColourId).withAlpha(1.0f));
+				g.setFont(GLOBAL_FONT());
+				g.drawText(button.getButtonText(), button.getLocalBounds().toFloat(), Justification::centred);
+			}
+		} laf;
+
+		std::map<String, String> descriptions;
+
+		CreateNodePopup(DspNetworkComponent& parent, Point<int> pos, const BuildHelpers::CreateData& cd_) :
+		  TextEditorWithAutocompleteComponent(),
+		  cd(cd_),
+		  root(&parent),
+		  originalPosition(pos),
+		  zp(parent.findParentComponentOfClass<ZoomableViewport>()),
+		  descriptions(parent.db.getDescriptions())
+		{
+			zp->addZoomListener(this);
+
+			addFactoryButton("All");
+
+			for(auto f: parent.db.getFactoryIds(cd.source == nullptr))
+			{
+				addFactoryButton(f);
+			}
+
+			factoryButtons.getFirst()->setConnectedEdges(Button::ConnectedOnLeft);
+			factoryButtons.getLast()->setConnectedEdges(Button::ConnectedOnRight);
+
+			for(int i = 1; i < factoryButtons.size() - 1; i++)
+			{
+				factoryButtons[i]->setConnectedEdges(Button::ConnectedOnRight | Button::ConnectedOnLeft);
+				factoryButtons[i]->setColour(TextButton::ColourIds::buttonColourId, Helpers::getFadeColour(i, factoryButtons.size()));
+			}
+
+			factoryButtons.getLast()->setColour(TextButton::ColourIds::buttonColourId, Helpers::getFadeColour(factoryButtons.size()-1, factoryButtons.size()));
+			
+
+			useDynamicAutocomplete = true;
+
+			auto tl = dynamic_cast<Component*>(parent.findParentComponentOfClass<Parent>());
+
+			tl->addAndMakeVisible(this);
+
+			addAndMakeVisible(editor);
+			initEditor();
+
+			updateTextEditorOnItemChange = true;
+
+			int h = 0;
+
+			h += 10;
+			h += 24;
+			h += 32;
+			h += 5;
+			h += 24;
+			h += 10;
+
+			int w = 10;
+
+			for(auto tb: factoryButtons)
+				w += tb->getWidth();
+
+			w += 10;
+
+			setSize(jmax(w, 300), h);
+			GlobalHiseLookAndFeel::setTextEditorColours(editor);
+			editor.setColour(TextEditor::ColourIds::highlightedTextColourId, Colours::black);
+			editor.setColour(CaretComponent::ColourIds::caretColourId, Colours::black);
+			editor.grabKeyboardFocusAsync();
+			editor.setTextToShowWhenEmpty("Type to create node", Colours::grey);
+
+			
+
+
+
+			zp->setSuspendWASD(true);
+			//zp->scrollToRectangle(getBoundsInParent(), true);
+
+			updatePosition();
+		}
+
+		Point<int> originalPosition;
+
+		void updatePosition()
+		{
+			auto tl = dynamic_cast<Component*>(root->findParentComponentOfClass<Parent>());
+			setTopLeftPosition(tl->getLocalPoint(root, originalPosition));
+		}
+
+		void addFactoryButton(const String& factoryId)
+		{
+			auto nb = new TextButton(factoryId);
+			nb->setLookAndFeel(&laf);
+			addAndMakeVisible(nb);
+			factoryButtons.add(nb);
+
+			nb->setClickingTogglesState(true);
+			nb->setRadioGroupId(9012421);
+			nb->onClick = [this, nb]()
+			{
+				auto t = nb->getButtonText();
+
+				if(t == "All")
+					t = {};
+				else
+					t << ".";
+
+				setFactory(t, nb->findColour(TextButton::ColourIds::buttonColourId));
+			};
+
+			auto w = GLOBAL_FONT().getStringWidth(factoryId) + 20;
+
+			nb->setSize(w, 24);
+		}
+
+		String currentDescription;
+		Colour currentFactoryColour;
+		String currentFactory;
+		Rectangle<float> factoryLabel;
+
+		void setFactory(const String& factory, Colour c)
+		{
+			if(factory != currentFactory)
+			{
+				currentFactory = factory;
+				currentFactoryColour = c;
+				resized();
+				repaint();
+				dismissAutocomplete();
+				editor.setText("", dontSendNotification);
+				showAutocomplete({});
+				editor.setText(autocompleteItems[0], dontSendNotification);
+				editor.grabKeyboardFocusAsync();
+			}
+		}
+
+		OwnedArray<TextButton> factoryButtons;
+
+		ZoomableViewport* zp;
+
+		void zoomChanged(float) override {}
+
+		void positionChanged(Point<int>) override
+		{
+			updatePosition();
+		}
+
+		~CreateNodePopup()
+		{
+			if(root != nullptr)
+			{
+				root->currentBuildPath = {};
+				root->repaint();
+			}
+			
+			if(zp != nullptr)
+			{
+				zp->removeZoomListener(this);
+				zp->setSuspendWASD(false);
+			}
+				
+		}
+
+		void textEditorReturnKeyPressed(TextEditor& te) override;
+
+		void dismiss()
+		{
+			if(root.getComponent() != nullptr)
+				root->currentCreateNodePopup = nullptr;
+		}
+
+		void textEditorEscapeKeyPressed(TextEditor& te) override
+		{
+			TextEditorWithAutocompleteComponent::textEditorEscapeKeyPressed(te);
+			dismiss();
+		}
+
+		void textEditorTextChanged(TextEditor& te) override
+		{
+			TextEditorWithAutocompleteComponent::textEditorTextChanged(te);
+
+			if(autocompleteItems.contains(te.getText()))
+				textEditorReturnKeyPressed(te);
+		}
+
+		TextEditor* getTextEditor() override { return &editor; }
+
+		Identifier getIdForAutocomplete() const override 
+		{ 
+			if(currentFactory.isEmpty())
+				return {};
+
+			return Identifier(currentFactory); 
+		}
+		
+		void autoCompleteItemSelected(int selectedIndex, const String& item) override
+		{
+			TextEditorWithAutocompleteComponent::autoCompleteItemSelected(selectedIndex, item);
+
+			auto fullPath = currentFactory + item;
+
+			if(descriptions.find(fullPath) != descriptions.end())
+				currentDescription = descriptions.at(fullPath);
+			else
+				currentDescription = {};
+
+			repaint();
+		}
+
+		void resized() override
+		{
+			auto b = getLocalBounds().reduced(10);
+
+			auto w = b.getWidth() / factoryButtons.size();
+
+			auto top = b.removeFromTop(24);
+
+			for(auto fb: factoryButtons)
+			{
+				fb->setTopLeftPosition(top.getTopLeft());
+				top.removeFromLeft((fb->getWidth()));
+			}
+
+			descriptionBounds = b.removeFromTop(32).toFloat();
+
+			if(currentFactory.isNotEmpty())
+			{
+				auto intend = GLOBAL_BOLD_FONT().getStringWidth(currentFactory) + 10;
+				factoryLabel = b.removeFromLeft(intend).toFloat();
+			}
+
+			editor.setBounds(b);
+		}
+
+		void paint(Graphics& g) override
+		{
+			auto b = getLocalBounds().toFloat();
+
+			DropShadow sh;
+			sh.colour = Colours::black.withAlpha(0.7f);
+			sh.radius = 5;
+			sh.drawForRectangle(g, b.toNearestInt().reduced(5));
+
+			g.setColour(Colour(0xFF222222));
+			g.fillRect(b.reduced(5.0f));
+			g.setColour(Colours::white.withAlpha(0.5f));
+			g.drawRoundedRectangle(b.reduced(2.0f), 5.0f, 2.0f); 
+
+			if(currentDescription.isNotEmpty())
+			{
+				g.setFont(GLOBAL_FONT());
+				g.setColour(Colours::white.withAlpha(0.7f));
+				g.drawText(currentDescription, descriptionBounds, Justification::left);
+			}
+
+			if(currentFactory.isNotEmpty())
+			{
+				g.setColour(currentFactoryColour);
+				g.setFont(GLOBAL_BOLD_FONT());
+				g.drawText(currentFactory, factoryLabel, Justification::left);
+			}
+		}
+
+		TextEditor editor;
+
+		Rectangle<float> descriptionBounds;
+
+		BuildHelpers::CreateData cd;
+
+		Component::SafePointer<DspNetworkComponent> root;
+	};
+
+	void showCreateNodePopup(Point<int> position, const Path& buildPath, const BuildHelpers::CreateData& cd)
+	{
+		selection.deselectAll();
+
+		currentCreateNodePopup = nullptr;
+
+		createSignalNodes = cd.signalIndex != -1;
+
+		currentBuildPath = buildPath;
+
+		currentCreateNodePopup = new CreateNodePopup(*this, position, cd);
+		currentCreateNodePopup->showAutocomplete({});
+
+		repaint();
+	}
+
+	Path currentBuildPath;
+
+	ScopedPointer<CreateNodePopup> currentCreateNodePopup;
+
 	ValueTree data;
 
 	ScopedPointer<ContainerComponent> rootComponent;
 	valuetree::PropertyListener rootSizeListener;
 
 	valuetree::RecursivePropertyListener foldListener;
+
+	void setIsDragged(NodeComponent* nc);
+
+	void clearDraggedComponents();
+
+	void resetDraggedBounds();
+
+	Component::SafePointer<ContainerComponent> currentlyHoveredContainer;
+
+private:
+
+	Array<Component::SafePointer<NodeComponent>> currentlyDraggedComponents;
+	
 
 	
 };

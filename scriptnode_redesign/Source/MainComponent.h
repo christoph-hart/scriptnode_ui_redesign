@@ -18,14 +18,29 @@ using namespace juce;
 - add dragging OK
 - optimize space function OK
 - add proper delete / reassign OK
+- add create popup OK
 
 
-- add create popup
-- fix dragging into other containers
-- refactor: make scriptnode lib objects
-- make offline container not part of signal path
+- refactor: make scriptnode lib objects OK
+- add cable curve functions OK
+- fix cable node detection (use database) OK
+- make database a shared object OK
+- fix IsAutomated when creating a cable node with Value OK
+- make offline container not part of signal path OK
 
+- add collapse function & breadcrumb stuff 
+- fix cable node dragging into other containers
+- remove screenshots from database
 
+- fix double connections after duplicating nodes
+- fix selection with folded containers
+- fix alignment & distribution with folded containers
+- add free floating comments
+- fix dragging containers / big nodes into smaller containers
+- cleanup groups when deleting nodes
+- fix send / receive node stuff
+- move modulation output 10px down for straight connection line
+- 
 
 
 */
@@ -42,7 +57,8 @@ using namespace juce;
 */
 class MainComponent  : public juce::Component,
                        public PathFactory,
-                       public valuetree::AnyListener
+                       public valuetree::AnyListener,
+	                   public TextEditorWithAutocompleteComponent::Parent
 {
     static constexpr int MenuHeight = 24;
 
@@ -61,9 +77,34 @@ public:
         codeDoc.replaceAllContent(newContent);
     }
 
+	StringArray getAutocompleteItems(const Identifier& id) override
+	{
+        auto createSignalNodes = viewport.getContent<scriptnode::DspNetworkComponent>()->createSignalNodes;
+
+        auto list = db.getNodeIds(createSignalNodes);
+
+        if(id.isValid())
+        {
+            auto prefix = id.toString();
+
+            StringArray matches;
+            matches.ensureStorageAllocated(list.size());
+
+            for(const auto& l: list)
+            {
+                if(l.startsWith(prefix))
+                    matches.add(l.fromFirstOccurrenceOf(prefix, false, false));
+            }
+
+            return matches;
+        }
+
+        return list;
+	}
+
 private:
 
-    
+    scriptnode::NodeDatabase db;
 
     //==============================================================================
     // Your private member variables go here...
@@ -72,8 +113,6 @@ private:
     
     hise::ZoomableViewport viewport;
 
-    
-    
     juce::CodeDocument codeDoc;
     mcl::TextDocument doc;
     mcl::TextEditor viewer;
@@ -94,6 +133,7 @@ private:
 	HiseShapeButton buttonAutoLayout;
 	HiseShapeButton buttonAlignTop;
 	HiseShapeButton buttonAlignLeft;
+    HiseShapeButton buttonSetColour;
 	HiseShapeButton buttonDistributeHorizontally;
 	HiseShapeButton buttonDistributeVertically;
 

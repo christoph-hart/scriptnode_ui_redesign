@@ -36,6 +36,30 @@ using namespace juce;
 
 
 
+DraggedCable::~DraggedCable()
+{
+	if (hoveredPin == nullptr)
+	{
+		BuildHelpers::CreateData cd;
+		
+		auto root = src->findParentComponentOfClass<DspNetworkComponent>();
+		auto pos = root->getLocalPoint(this, e.toInt());
+
+		auto container = root->rootComponent->getInnerContainer(root, pos, nullptr);
+
+		cd.containerToInsert = container->getValueTree();
+		cd.pointInContainer = container->getLocalPoint(root, pos);
+		cd.source = src;
+
+		auto delta = getPosition();
+
+		
+		p.applyTransform(AffineTransform::translation(delta));
+
+		root->showCreateNodePopup(pos, p, cd);
+	}
+}
+
 void DraggedCable::setTargetPosition(Point<int> rootPosition)
 {
 	auto parent = getParentComponent();
@@ -218,6 +242,75 @@ void CableComponent::CableHolder::rebuildCables()
 	{
 		asComponent->addChildComponent(labels.add(new CableLabel(c)));
 		labels.getLast()->updatePosition();
+	}
+}
+
+void DspNetworkComponent::setIsDragged(NodeComponent* nc)
+{
+	auto currentParent = dynamic_cast<ContainerComponent*>(nc->getParentComponent());
+
+	if(currentParent == nullptr)
+		return;
+
+	auto currentBounds = nc->getBoundsInParent();
+
+	currentlyDraggedComponents.add(nc);
+	currentParent->removeChildComponent(nc);
+	addChildComponent(nc);
+
+	currentParent->cables.updatePins(*currentParent);
+
+	nc->setAlpha(0.5f);
+
+	auto rootBounds = getLocalArea(currentParent, currentBounds);
+	nc->setBounds(rootBounds);
+}
+
+void DspNetworkComponent::clearDraggedComponents()
+{
+	currentlyDraggedComponents.clear();
+}
+
+void DspNetworkComponent::resetDraggedBounds()
+{
+	if (currentlyHoveredContainer != nullptr)
+	{
+		for (auto nc : currentlyDraggedComponents)
+		{
+			auto containerBounds = currentlyHoveredContainer->getLocalArea(this, nc->getBoundsInParent());
+			Helpers::updateBounds(nc->getValueTree(), containerBounds, &um);
+		}
+	}
+}
+
+void DspNetworkComponent::CreateNodePopup::textEditorReturnKeyPressed(TextEditor& te)
+{
+	timerCallback();
+
+	TextEditorWithAutocompleteComponent::textEditorReturnKeyPressed(te);
+	auto text = editor.getText();
+
+	if(currentFactory.isNotEmpty())
+		text = currentFactory + text;
+
+
+	Array<ValueTree> newNodes;
+
+	auto v = BuildHelpers::createNode(root->db, text, cd, &root->um);
+	
+	if(v.isValid())
+	{
+		newNodes.add(v);
+
+		auto r = root;
+
+		MessageManager::callAsync([newNodes, r]()
+		{
+			r->setSelection(newNodes);
+			r->grabKeyboardFocusAsync();
+		});
+
+		dismiss();
 	}
 }
 

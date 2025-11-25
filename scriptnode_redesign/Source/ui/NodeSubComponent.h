@@ -146,6 +146,11 @@ private:
 
 struct ParameterComponent : public CablePinBase
 {
+	struct Laf: public GlobalHiseLookAndFeel
+	{
+	} laf;
+
+
 	ParameterComponent(ValueTree v, UndoManager* um_) :
 		CablePinBase(v, um_)
 	{
@@ -160,6 +165,7 @@ struct ParameterComponent : public CablePinBase
 		slider.setColour(HiseColourScheme::ColourIds::ComponentFillTopColourId, tr);
 		slider.setColour(HiseColourScheme::ColourIds::ComponentFillBottomColourId, tr);
 		slider.setColour(HiseColourScheme::ColourIds::ComponentOutlineColourId, tr);
+		slider.setColour(Slider::textBoxOutlineColourId, Colours::transparentBlack);
 		slider.setScrollWheelEnabled(false);
 
 		slider.getValueObject().referTo(v.getPropertyAsValue(PropertyIds::Value, um, false));
@@ -200,14 +206,14 @@ struct ParameterComponent : public CablePinBase
 		
 		
 		auto tb = getLocalBounds().toFloat();
-		tb.removeFromLeft(Helpers::ParameterHeight + 10.0f);
+		tb.removeFromLeft(Helpers::ParameterHeight + Helpers::ParameterMargin);
 
 		if(isOutsideParameter())
 		{
 			g.setFont(GLOBAL_FONT());
 			auto rootId = Helpers::getHeaderTitle(valuetree::Helpers::findParentWithType(data, PropertyIds::Node));
 			g.setColour(Colours::white.withAlpha(0.4f));
-			g.drawText("from " + rootId, tb.removeFromBottom(tb.getHeight() * 0.5), Justification::left);
+			g.drawText(rootId, tb.removeFromBottom(tb.getHeight() * 0.5), Justification::left);
 		}
 
 		g.setFont(GLOBAL_BOLD_FONT());
@@ -228,8 +234,6 @@ struct ParameterComponent : public CablePinBase
 
 	String getTargetParameterId() const override { return data[PropertyIds::ID].toString(); }
 
-	hise::GlobalHiseLookAndFeel laf;
-
 	ValueTree getConnectionTree() const override
 	{
 		return data.getChildWithName(PropertyIds::Connections);
@@ -238,10 +242,9 @@ struct ParameterComponent : public CablePinBase
 	void resized() override
 	{
 		auto b = getLocalBounds();
-		b.removeFromLeft(5);
+
 		slider.setBounds(b.removeFromLeft(Helpers::ParameterHeight));
 	}
-
 	juce::Slider slider;
 };
 
@@ -303,6 +306,75 @@ struct ModOutputComponent : public CablePinBase
 	}
 
 
+};
+
+struct BuildHelpers
+{
+	struct CreateData
+	{
+		ValueTree containerToInsert;
+		WeakReference<CablePinBase> source;
+		Point<int> pointInContainer;
+		int signalIndex = -1;
+	};
+
+	static ValueTree createNode(const NodeDatabase& db, const String& factoryPath, const CreateData& cd, UndoManager* um)
+	{
+		jassert(cd.source != nullptr || cd.signalIndex != -1);
+
+		Colour c;
+
+		auto v = db.getValueTree(factoryPath);
+
+		if(!v.isValid())
+			return v;
+
+		if(cd.source != nullptr)
+			c = Helpers::getParameterColour(cd.source->data);
+
+		auto rt = valuetree::Helpers::findParentWithType(cd.containerToInsert, PropertyIds::Network);
+
+		auto newId = Helpers::getUniqueId(factoryPath.fromFirstOccurrenceOf(".", false, false), rt);
+
+		v.setProperty(PropertyIds::ID, newId, nullptr);
+		v.setProperty(PropertyIds::NodeColour, c.getARGB(), nullptr);
+
+		auto yOffset = Helpers::HeaderHeight;
+		yOffset += Helpers::ParameterMargin;
+		yOffset += Helpers::ParameterHeight / 2;
+
+		v.setProperty(UIPropertyIds::x, cd.pointInContainer.getX(), nullptr);
+		v.setProperty(UIPropertyIds::y, cd.pointInContainer.getY() - yOffset, nullptr);
+
+		auto nodeTree = cd.containerToInsert.getChildWithName(PropertyIds::Nodes);
+
+		nodeTree.addChild(v, cd.signalIndex, um);
+
+		if(cd.source != nullptr)
+		{
+			auto conTree = cd.source->getConnectionTree();
+
+			ValueTree nc(PropertyIds::Connection);
+			nc.setProperty(PropertyIds::NodeId, newId, nullptr);
+			nc.setProperty(PropertyIds::ParameterId, "Value", nullptr);
+			conTree.addChild(nc, -1, um);
+		}
+
+		if(cd.source != nullptr)
+		{
+			auto ptree = v.getChildWithName(PropertyIds::Parameters);
+			ptree.getChildWithProperty(PropertyIds::ID, "Value").setProperty(PropertyIds::Automated, true, nullptr);
+		}
+
+		auto rootContainer = rt.getChildWithName(PropertyIds::Node);
+
+		MessageManager::callAsync([rootContainer, um]()
+		{
+			Helpers::fixOverlap(rootContainer, um, false);
+		});
+
+		return v;
+	}
 };
 
 }
