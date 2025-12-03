@@ -155,7 +155,7 @@ struct Helpers
 
 	static String getUniqueId(const String& prefix, const ValueTree& rootTree);
 
-	static void setNodeProperty(ValueTree& v, const Identifier& propertyName, const var& value, UndoManager* um);
+	static void setNodeProperty(ValueTree v, const Identifier& propertyName, const var& value, UndoManager* um);
 
 	static Colour getFadeColour(int index, int numPaths)
 	{
@@ -290,7 +290,7 @@ struct Helpers
 
 	static bool isProcessingSignal(const ValueTree& v);
 
-	static void translatePosition(ValueTree& node, Point<int> delta, UndoManager* um);
+	static void translatePosition(ValueTree node, Point<int> delta, UndoManager* um);
 
 	static void setMinPosition(Rectangle<int>& b, Point<int> minOffset);
 
@@ -298,7 +298,7 @@ struct Helpers
 
 	
 
-	static void updateBounds(ValueTree& v, Rectangle<int> newBounds, UndoManager* um);
+	static void updateBounds(ValueTree v, Rectangle<int> newBounds, UndoManager* um);
 
 	
 
@@ -342,17 +342,17 @@ struct Helpers
 		}
 	}
 
-	static void resetLayout(ValueTree& v, UndoManager* um);
+	static void resetLayout(ValueTree v, UndoManager* um);
 
-	static void migrateFeedbackConnections(ValueTree& root, bool createConnections, UndoManager* um);
+	static void migrateFeedbackConnections(ValueTree root, bool createConnections, UndoManager* um);
 
 	private:
 
-	static void resetLayoutRecursive(ValueTree& root, ValueTree& child, UndoManager* um);
+	static void resetLayoutRecursive(ValueTree root, ValueTree& child, UndoManager* um);
 
-	static void fixOverlapRecursive(ValueTree& node, UndoManager* um, bool sortProcessNodesFirst);
+	static void fixOverlapRecursive(ValueTree node, UndoManager* um, bool sortProcessNodesFirst);
 
-	static void updateChannelRecursive(ValueTree& v, int numChannels, UndoManager* um);
+	static void updateChannelRecursive(ValueTree v, int numChannels, UndoManager* um);
 
 	
 

@@ -119,7 +119,7 @@ juce::String Helpers::getUniqueId(const String& prefix, const ValueTree& rootTre
 		return prefix + String(suffix+1);
 }
 
-void Helpers::setNodeProperty(ValueTree& v, const Identifier& propertyName, const var& value, UndoManager* um)
+void Helpers::setNodeProperty(ValueTree v, const Identifier& propertyName, const var& value, UndoManager* um)
 {
 	jassert(v.getType() == PropertyIds::Node);
 
@@ -252,7 +252,7 @@ bool Helpers::isProcessingSignal(const ValueTree& v)
 
 }
 
-void Helpers::translatePosition(ValueTree& node, Point<int> delta, UndoManager* um)
+void Helpers::translatePosition(ValueTree node, Point<int> delta, UndoManager* um)
 {
 	auto pos = getPosition(node);
 	auto newPos = pos.translated(delta.getX(), delta.getY());
@@ -273,7 +273,7 @@ bool Helpers::hasDefinedBounds(const ValueTree& v)
 
 
 
-void Helpers::updateBounds(ValueTree& v, Rectangle<int> newBounds, UndoManager* um)
+void Helpers::updateBounds(ValueTree v, Rectangle<int> newBounds, UndoManager* um)
 {
 	jassert(v.getType() == PropertyIds::Node);
 
@@ -472,7 +472,7 @@ Rectangle<int> Helpers::getBoundsInRoot(const ValueTree& v, bool includingCommen
 	return b;
 }
 
-void Helpers::fixOverlapRecursive(ValueTree& node, UndoManager* um, bool sortProcessNodesFirst)
+void Helpers::fixOverlapRecursive(ValueTree node, UndoManager* um, bool sortProcessNodesFirst)
 {
 	jassert(node.getType() == PropertyIds::Node);
 	auto bounds = getBounds(node, false);
@@ -601,7 +601,7 @@ void Helpers::fixOverlapRecursive(ValueTree& node, UndoManager* um, bool sortPro
 		}, um);
 }
 
-void Helpers::updateChannelRecursive(ValueTree& v, int numChannels, UndoManager* um)
+void Helpers::updateChannelRecursive(ValueTree v, int numChannels, UndoManager* um)
 {
 	jassert(v.getType() == PropertyIds::Node);
 
@@ -634,7 +634,7 @@ void Helpers::updateChannelRecursive(ValueTree& v, int numChannels, UndoManager*
 }
 
 
-void Helpers::migrateFeedbackConnections(ValueTree& root, bool createConnections, UndoManager* um)
+void Helpers::migrateFeedbackConnections(ValueTree root, bool createConnections, UndoManager* um)
 {
 	valuetree::Helpers::forEach(root, [&](ValueTree& v)
 	{
@@ -700,13 +700,13 @@ void Helpers::migrateFeedbackConnections(ValueTree& root, bool createConnections
 	});
 }
 
-void Helpers::resetLayout(ValueTree& nt, UndoManager* um)
+void Helpers::resetLayout(ValueTree nt, UndoManager* um)
 {
 	resetLayoutRecursive(nt, nt, um);
 	fixOverlap(nt, um, true);
 }
 
-void Helpers::resetLayoutRecursive(ValueTree& root, ValueTree& child, UndoManager* um)
+void Helpers::resetLayoutRecursive(ValueTree root, ValueTree& child, UndoManager* um)
 {
 	jassert(child.getType() == PropertyIds::Node);
 

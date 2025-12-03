@@ -2107,7 +2107,7 @@ struct DspNetworkComponent : public Component,
 
 	Component::SafePointer<ContainerComponent> currentlyHoveredContainer;
 
-	static void switchRootNode(Component* c, ValueTree& newRoot)
+	static void switchRootNode(Component* c, ValueTree newRoot)
 	{
 		if(auto vp = c->findParentComponentOfClass<ZoomableViewport>())
 		{

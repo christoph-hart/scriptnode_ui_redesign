@@ -50,7 +50,7 @@ MainComponent::MainComponent():
 		}
 	}
 
-	db.processValueTrees([](ValueTree& v)
+	db.processValueTrees([](ValueTree v)
 	{
 		using namespace scriptnode;
 
@@ -174,7 +174,7 @@ void MainComponent::resized()
 	placeButton(buttonDistributeHorizontally);
 	placeButton(buttonDistributeVertically);
 
-	viewer.setBounds(b.removeFromLeft(800));
+	viewer.setBounds(b.removeFromLeft(jmin(800, getWidth() / 4)));
 
     viewport.setBounds(b);
 }

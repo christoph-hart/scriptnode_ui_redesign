@@ -241,8 +241,8 @@ struct SelectableComponent: public ChangeListener
 			for (auto& n : list)
 			{
 				auto copy = n.createCopy();
-				auto n = Helpers::getHeaderTitle(copy);
-				copy.setProperty(PropertyIds::Name, n, nullptr);
+				auto t = Helpers::getHeaderTitle(copy);
+				copy.setProperty(PropertyIds::Name, t, nullptr);
 				Helpers::translatePosition(copy, { deltaX, deltaY }, nullptr);
 				newTrees.add(copy);
 			}
@@ -489,7 +489,8 @@ struct NodeComponent : public Component,
 
 			if(Helpers::isRootNode(v))
 			{
-				valuetree::Helpers::forEachParent(parent.getValueTree(), [this](ValueTree& n)
+                auto v = parent.getValueTree();
+				valuetree::Helpers::forEachParent(v, [this](ValueTree& n)
 				{
 					if(n.getType() == PropertyIds::Node && n != parent.getValueTree())
 					{

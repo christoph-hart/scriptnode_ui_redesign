@@ -85,7 +85,7 @@
         <MODULEPATH id="hi_rlottie" path="../../../HISE modules"/>
       </MODULEPATHS>
     </VS2022>
-    <XCODE_MAC targetFolder="Builds/MacOSX" extraDefs="HISE_INCLUDE_LORIS=0">
+    <XCODE_MAC targetFolder="Builds/MacOSX" extraDefs="HISE_INCLUDE_LORIS=0&#10;USE_BACKEND=1&#10;HISE_INCLUDE_SCRIPTNODE_DATABASE=1">
       <CONFIGURATIONS>
         <CONFIGURATION isDebug="1" name="Debug" targetName="scriptnode_redesign"/>
         <CONFIGURATION isDebug="0" name="Release" targetName="scriptnode_redesign"/>
