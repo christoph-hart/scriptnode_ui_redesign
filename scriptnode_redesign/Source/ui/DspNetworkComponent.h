@@ -704,9 +704,61 @@ struct CableComponent : public CableBase,
 	valuetree::RemoveListener removeListener;
 };
 
+struct LODManager: public hise::ZoomableViewport::ZoomListener
+{
+	LODManager(ZoomableViewport& zp_):
+	  zp(&zp_)
+	{
+		zp->addZoomListener(this);
+	}
+
+	~LODManager() override 
+	{
+		if(auto z = zp.getComponent())
+			z->removeZoomListener(this);
+	};
+
+	static int zoomFactorToLOD(float sf)
+	{
+		if(sf > 1.0)
+			return 0;
+		if(sf > 0.5)
+			return 1;
+		if(sf > 0.33)
+			return 2;
+		
+		return 3;
+	}
+
+	Component& asComponent() { return *dynamic_cast<Component*>(this); }
+
+	static int getLOD(Component& c)
+	{
+		auto lm = c.findParentComponentOfClass<LODManager>();
+		return lm->currentLOD;
+	}
+
+	void zoomChanged(float newScalingFactor) override
+	{
+		auto newLOD = zoomFactorToLOD(newScalingFactor);
+
+		if(newLOD != currentLOD)
+		{
+			currentLOD = newLOD;
+			asComponent().repaint();
+		}
+	}
+
+private:
+
+	int currentLOD = 0;
+	Component::SafePointer<ZoomableViewport> zp;
+};
+
 struct DspNetworkComponent : public Component,
 							 public NodeComponent::Lasso,
-							 public CableComponent::CableHolder
+							 public CableComponent::CableHolder,
+							 public LODManager
 {
 	struct Parent: public TextEditorWithAutocompleteComponent::Parent
 	{
@@ -931,8 +983,9 @@ struct DspNetworkComponent : public Component,
 		numActions
 	};
 
-	DspNetworkComponent(const ValueTree& networkTree, const ValueTree& container) :
+	DspNetworkComponent(ZoomableViewport& zp, const ValueTree& networkTree, const ValueTree& container) :
 		CableHolder(networkTree),
+		LODManager(zp),
 		data(networkTree)
 	{
 		calloutLAF.getCurrentColourScheme().setUIColour(LookAndFeel_V4::ColourScheme::widgetBackground, Colour(0xFF353535));

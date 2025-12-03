@@ -96,6 +96,8 @@ void NodeComponent::HeaderComponent::mouseDown(const MouseEvent& e)
 			selectionPositions[s] = dynamic_cast<Component*>(s.get())->getBoundsInParent();
 	}
 
+	shiftDown = e.mods.isShiftDown();
+
 	dragger.startDraggingComponent(&parent, e);
 
 	originalParent = parent.getParentComponent();

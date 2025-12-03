@@ -531,6 +531,8 @@ struct NodeComponent : public Component,
 
 		Helpers::ConnectionType getConnectionType() const override { return Helpers::ConnectionType::Bypassed; };
 
+		bool shiftDown = false;
+
 		void checkBounds (Rectangle<int>& bounds, const Rectangle<int>&, const Rectangle<int>&, bool, bool, bool,bool ) override
 		{
 			auto minX = Helpers::ParameterWidth + Helpers::NodeMargin;
@@ -538,6 +540,53 @@ struct NodeComponent : public Component,
 
 			auto offsetX = 0;
 			auto offsetY = 0;
+
+			auto x = bounds.getX();
+			auto y = bounds.getY();
+
+			if(shiftDown)
+			{
+				x -= x % 100;
+				y -= y % 100;
+			}
+
+			auto childNodes = parent.getValueTree().getParent();
+
+			for(auto cn: childNodes)
+			{
+				if(cn == parent.getValueTree())
+					continue;
+
+				bool found = false;
+
+				for(const auto& s: selectionPositions)
+				{
+					if(s.first->getValueTree() == cn)
+					{
+						found = true;
+						break;
+					}
+						
+				}
+
+				if(found)
+					continue;
+
+				auto cnPos = Helpers::getPosition(cn);
+
+				auto cx = cnPos.getX();
+				auto cy = cnPos.getY();
+
+				auto dx = std::abs(cx - x);
+				auto dy = std::abs(cy - y);
+
+				if(dx < 20)
+					x = cx;
+				else if(dy < 20)
+					y = cy;
+			}
+
+			bounds.setPosition(x, y);
 
 			Rectangle<int> possible(minX + offsetY, minY + offsetY, 10000000, 10000000);
 
