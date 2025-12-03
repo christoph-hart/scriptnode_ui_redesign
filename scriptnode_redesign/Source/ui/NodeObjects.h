@@ -75,13 +75,18 @@ struct ProcessNodeComponent : public NodeComponent
 		{
 			g.setColour(Colours::grey);
 
-			for (auto& s: screws)
-				g.fillPath(s);
+			auto lod = LODManager::getLOD(*this);
+
+			if(lod == 0)
+			{
+				for (auto& s : screws)
+					g.fillPath(s);
+			}
 
 			if(!canBeTarget())
 			{
 				g.setColour(Colours::white.withAlpha(isMouseOver() ? 0.7f : 0.5f));
-				g.fillPath(targetIcon);
+				LayoutTools::fillPathOrEllipse(g, lod, targetIcon);
 			}
 				
 			g.setColour(Colours::white.withAlpha(0.3f));
@@ -89,7 +94,8 @@ struct ProcessNodeComponent : public NodeComponent
 			auto j = canBeTarget() ? Justification::right : Justification::left;
 
 			g.setFont(GLOBAL_FONT());
-			g.drawText(getSourceDescription().fromFirstOccurrenceOf(".", false, false), getLocalBounds().reduced(10, 0).toFloat(), j);
+
+			LayoutTools::drawTextWithLOD(g, lod, getSourceDescription().fromFirstOccurrenceOf(".", false, false), getLocalBounds().reduced(10, 0).toFloat(), j);
 		}
 
 		String getSourceDescription() const override
@@ -203,6 +209,8 @@ struct ProcessNodeComponent : public NodeComponent
 
 		auto cl = Helpers::getNodeColour(getValueTree());
 
+		auto lod = LODManager::getLOD(*this);
+
 		if(routableSignal != nullptr)
 		{
 			jassert(routableSignal->screws.size() == numChannels);
@@ -229,25 +237,40 @@ struct ProcessNodeComponent : public NodeComponent
 				offset += 6.0f * ((float)i / (float)numChannels);
 
 				Path p;
-				Helpers::createCustomizableCurve(p, p1, p2, offset, 3.0f, true);
 
-				g.setColour(Colours::black.withAlpha(0.7f));
-				g.strokePath(p, PathStrokeType(3.0f));
+
+
+				Helpers::createCustomizableCurve(p, p1, p2, offset, lod == 0 ? 3.0f : 0.0f, true);
+
+				auto stroke = LayoutTools::getCableThickness(lod);
+
+				if(lod == 0)
+				{
+					g.setColour(Colours::black.withAlpha(0.7f));
+					g.strokePath(p, PathStrokeType(3.0f));
+				}
+
 				g.setColour(cl);
-				g.strokePath(p, PathStrokeType(1.0f));
+				g.strokePath(p, PathStrokeType(stroke));
 			}
 		}
 
+		
+
 		for(auto& c: cables)
 		{
-			g.setColour(Colours::grey);
-			g.fillPath(c.first);
-			g.fillPath(c.second);
+			if(lod == 0)
+			{
+				g.setColour(Colours::grey);
+				g.fillPath(c.first);
+				g.fillPath(c.second);
 
-			g.setColour(Colours::black.withAlpha(0.7f));
-			g.drawLine({ c.first.getBounds().getCentre(), c.second.getBounds().getCentre() }, 3.0f);
+				g.setColour(Colours::black.withAlpha(0.7f));
+				g.drawLine({ c.first.getBounds().getCentre(), c.second.getBounds().getCentre() }, 3.0f);
+			}
+			
 			g.setColour(cl);
-			g.drawLine({ c.first.getBounds().getCentre(), c.second.getBounds().getCentre() }, 1.0f);
+			g.drawLine({ c.first.getBounds().getCentre(), c.second.getBounds().getCentre() }, LayoutTools::getCableThickness(lod));
 		}
 	}
 

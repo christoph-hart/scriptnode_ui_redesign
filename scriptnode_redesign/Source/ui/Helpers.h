@@ -122,6 +122,48 @@ struct LayoutTools
 	static void alignCables(const Array<CableData>& list, UndoManager* um);
 	static void distributeCableOffsets(const Array<ValueTree>& list, UndoManager* um);
 
+	static void drawTextWithLOD(Graphics& g, int lod, const String& text, Rectangle<float> tb, Justification j)
+	{
+		if(lod < 2)
+		{
+			g.drawText(text, tb, j);
+		}
+		else
+		{
+			auto h = GLOBAL_BOLD_FONT().getHeight();
+			auto w = h * 0.4f * (float)text.length();
+
+			tb = j.appliedToRectangle(Rectangle<float>(tb.getX(), tb.getY(), w, h-2.0f), tb);
+			
+			Graphics::ScopedSaveState ss(g);
+
+			g.setOpacity(0.25f);
+			g.fillRect(tb.reduced(3.0f));
+		}
+	}
+
+	static void fillRoundedRectangle(Graphics& g, int lod, Rectangle<float> b, float cornerSize)
+	{
+		if(lod == 0)
+			g.fillRoundedRectangle(b, cornerSize);
+		else
+			g.fillRect(b);
+	}
+
+	static float getCableThickness(int lod)
+	{
+		float data[3] = { 1.0f, 2.0f, 4.0f };
+		return data[jlimit(0, 2, lod)];
+	}
+
+	static void fillPathOrEllipse(Graphics& g, int lod, const Path& p)
+	{
+		if(lod <= 1)
+			g.fillPath(p);
+		else
+			g.fillEllipse(p.getBounds());
+	}
+
 };
 
 
@@ -209,7 +251,8 @@ struct Helpers
 			path.lineTo(cx2);
 			path.lineTo(end);
 
-			path = path.createPathWithRoundedCorners(roundedCorners);
+			if(roundedCorners > 0.0f)
+				path = path.createPathWithRoundedCorners(roundedCorners);
 		}
 		else
 		{
@@ -428,6 +471,62 @@ struct DataBaseHelpers
 	}
 };
 
+struct LODManager : public hise::ZoomableViewport::ZoomListener
+{
+	LODManager(ZoomableViewport& zp_) :
+		zp(&zp_)
+	{
+		zp->addZoomListener(this);
+		currentLOD = zoomFactorToLOD(zp->getCurrentZoomFactor());
+	}
 
+	~LODManager() override
+	{
+		if (auto z = zp.getComponent())
+			z->removeZoomListener(this);
+	};
+
+	static int zoomFactorToLOD(float sf)
+	{
+		if (sf > JUCE_LIVE_CONSTANT_OFF(0.85))
+			return 0;
+		if (sf > JUCE_LIVE_CONSTANT_OFF(0.4))
+			return 1;
+
+		return 2;
+	}
+
+	void paintLOD(Graphics& g, Rectangle<int> b)
+	{
+		auto s = 16.0f / zp->getCurrentZoomFactor();
+		g.setFont(GLOBAL_BOLD_FONT().withHeight(s));
+		g.setColour(Colours::white.withAlpha(0.5f));
+		g.drawText(String(currentLOD), b.toFloat(), Justification::centred);
+	}
+
+	Component& asComponent() { return *dynamic_cast<Component*>(this); }
+
+	static int getLOD(Component& c)
+	{
+		auto lm = c.findParentComponentOfClass<LODManager>();
+		return lm->currentLOD;
+	}
+
+	void zoomChanged(float newScalingFactor) override
+	{
+		auto newLOD = zoomFactorToLOD(newScalingFactor);
+
+		if (newLOD != currentLOD)
+		{
+			currentLOD = newLOD;
+			asComponent().repaint();
+		}
+	}
+
+private:
+
+	int currentLOD = 0;
+	Component::SafePointer<ZoomableViewport> zp;
+};
 
 }

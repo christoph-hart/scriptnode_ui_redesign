@@ -111,14 +111,19 @@ struct CableBase: public Component,
 
 	void paint(Graphics& g) override
 	{
+		auto lod = LODManager::getLOD(*this);
+
 		if(colour1 == colour2)
 			g.setColour(colour1);
 		else
 			g.setGradientFill(ColourGradient(colour1, s, colour2, e, false));
-		g.strokePath(p, PathStrokeType(over ? 3.0f : 1.0f));
 
-		
-		g.fillEllipse(Rectangle<float>(s, s).withSizeKeepingCentre(6.0f, 6.0f));
+		auto strokeDepth = LayoutTools::getCableThickness(lod);
+
+		g.strokePath(p, PathStrokeType((over ? 3.0f : 1.0f) * strokeDepth));
+
+		if(lod == 0)
+			g.fillEllipse(Rectangle<float>(s, s).withSizeKeepingCentre(6.0f, 6.0f));
 		
 		g.fillPath(arrow);
 	}
@@ -231,13 +236,16 @@ struct CableComponent : public CableBase,
 
 		void paint(Graphics& g) override
 		{
+			auto lod = LODManager::getLOD(*this);
+
 			if (attachedCable.getComponent() != nullptr)
 			{
 				g.setFont(GLOBAL_FONT());
 				g.setColour(Colour(0xdd222222));
-				g.fillRoundedRectangle(getLocalBounds().toFloat(), (float)getHeight() * 0.5f);
+
+				LayoutTools::fillRoundedRectangle(g, lod, getLocalBounds().toFloat(), (float)getHeight() * 0.5f);				
 				g.setColour(attachedCable->colour2);
-				g.drawText(currentText, getLocalBounds().toFloat().reduced(5.0f, 0.0f), Justification::right);
+				LayoutTools::drawTextWithLOD(g, lod, currentText, getLocalBounds().toFloat().reduced(5.0f, 0.0f), Justification::right);
 			}
 		}
 
@@ -421,7 +429,10 @@ struct CableComponent : public CableBase,
 				auto c = attachment == Attachment::Source ? colour2 : colour1;
 
 				g.setColour(c.withAlpha(0.1f));
-				g.fillRoundedRectangle(textBounds.reduced(1.0f), 3.0f);
+
+				auto lod = LODManager::getLOD(*this);
+
+				LayoutTools::fillRoundedRectangle(g, lod, textBounds.reduced(1.0f), 3.0f);
 
 				g.setColour(c);
 
@@ -436,7 +447,7 @@ struct CableComponent : public CableBase,
 				}
 				
 				g.setFont(GLOBAL_FONT());
-				g.drawText(getTextToDisplay(), textBounds, Justification::centred);
+				LayoutTools::drawTextWithLOD(g, lod, getTextToDisplay(), textBounds, Justification::centred);
 			}
 
 			CableHolder& parent;
@@ -704,56 +715,7 @@ struct CableComponent : public CableBase,
 	valuetree::RemoveListener removeListener;
 };
 
-struct LODManager: public hise::ZoomableViewport::ZoomListener
-{
-	LODManager(ZoomableViewport& zp_):
-	  zp(&zp_)
-	{
-		zp->addZoomListener(this);
-	}
 
-	~LODManager() override 
-	{
-		if(auto z = zp.getComponent())
-			z->removeZoomListener(this);
-	};
-
-	static int zoomFactorToLOD(float sf)
-	{
-		if(sf > 1.0)
-			return 0;
-		if(sf > 0.5)
-			return 1;
-		if(sf > 0.33)
-			return 2;
-		
-		return 3;
-	}
-
-	Component& asComponent() { return *dynamic_cast<Component*>(this); }
-
-	static int getLOD(Component& c)
-	{
-		auto lm = c.findParentComponentOfClass<LODManager>();
-		return lm->currentLOD;
-	}
-
-	void zoomChanged(float newScalingFactor) override
-	{
-		auto newLOD = zoomFactorToLOD(newScalingFactor);
-
-		if(newLOD != currentLOD)
-		{
-			currentLOD = newLOD;
-			asComponent().repaint();
-		}
-	}
-
-private:
-
-	int currentLOD = 0;
-	Component::SafePointer<ZoomableViewport> zp;
-};
 
 struct DspNetworkComponent : public Component,
 							 public NodeComponent::Lasso,
@@ -2165,7 +2127,7 @@ struct DspNetworkComponent : public Component,
 		if(auto vp = c->findParentComponentOfClass<ZoomableViewport>())
 		{
 			auto root = valuetree::Helpers::findParentWithType(newRoot, PropertyIds::Network);
-			auto n = new DspNetworkComponent(root,newRoot);
+			auto n = new DspNetworkComponent(*vp, root,newRoot);
 			vp->setNewContent(n, nullptr);
 		}
 	}

@@ -470,15 +470,13 @@ struct NodeComponent : public Component,
 			if(!Helpers::isRootNode(v))
 				addChildComponent(closeButton);
 
-			powerButton.setToggleModeWithColourChange(true);
-
 			powerButton.onClick = [this]()
 			{
 				parent.toggle(PropertyIds::Bypassed);
 				parent.repaint();
 			};
 
-			powerButton.setToggleStateAndUpdateIcon(!parent.getValueTree()[PropertyIds::Bypassed]);
+			powerButton.setToggleState(!parent.getValueTree()[PropertyIds::Bypassed], dontSendNotification);
 
 			closeButton.onClick = [this]()
 			{
@@ -580,9 +578,9 @@ struct NodeComponent : public Component,
 				auto dx = std::abs(cx - x);
 				auto dy = std::abs(cy - y);
 
-				if(dx < 20)
+				if(dx < 10)
 					x = cx;
-				else if(dy < 20)
+				else if(dy < 10)
 					y = cy;
 			}
 
@@ -651,7 +649,8 @@ struct NodeComponent : public Component,
 			for(auto bc: breadcrumbs)
 				b.removeFromLeft(bc->getWidth());
 
-			g.drawText(Helpers::getHeaderTitle(parent.getValueTree()), b, Justification::left);
+			auto lod = LODManager::getLOD(*this);
+			LayoutTools::drawTextWithLOD(g, lod, Helpers::getHeaderTitle(parent.getValueTree()), b, Justification::left);
 		}
 
 		struct BreadcrumbButton: public Component
@@ -694,9 +693,41 @@ struct NodeComponent : public Component,
 			ValueTree data;
 		};
 
+		struct PowerButton: public ToggleButton
+		{
+			PowerButton(const String& name, void*, PathFactory& f):
+			  p(f.createPath(name))
+			{
+			}
+
+			void paint(Graphics& g) override
+			{
+				if(isMouseOver())
+				{
+					g.setColour(Colours::white.withAlpha(0.1f));
+					g.fillEllipse(getLocalBounds().toFloat());
+				}
+				g.setColour(getToggleState() ? Colour(SIGNAL_COLOUR) : Colour(0x33FFFFFF));
+
+				auto lod = LODManager::getLOD(*this);
+
+				if(lod < 2)
+					g.fillPath(p);
+				else
+					g.fillEllipse(p.getBounds());
+			}
+
+			void resized() override
+			{
+				PathFactory::scalePath(p, getLocalBounds().reduced(3).toFloat());
+			}
+
+			Path p;
+		};
+
 		NodeComponent& parent;
 		HiseShapeButton closeButton;
-		HiseShapeButton powerButton;
+		PowerButton powerButton;
 
 		OwnedArray<BreadcrumbButton> breadcrumbs;
 

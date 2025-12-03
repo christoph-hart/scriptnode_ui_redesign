@@ -123,7 +123,7 @@ MainComponent::MainComponent():
 				
 				auto rootContainer = currentTree.getChild(0);
 
-                viewport.setNewContent(new scriptnode::DspNetworkComponent(currentTree, rootContainer), nullptr);
+                viewport.setNewContent(new scriptnode::DspNetworkComponent(viewport, currentTree, rootContainer), nullptr);
 				
                 resized();
             }

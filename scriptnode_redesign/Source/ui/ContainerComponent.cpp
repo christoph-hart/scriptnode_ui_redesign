@@ -371,16 +371,27 @@ void ContainerComponent::paint(Graphics& g)
 		}
 	}
 
-	g.setColour(nodeColour);
-	g.drawRect(getLocalBounds(), 1);
+	auto lod = LODManager::getLOD(*this);
 
+	g.setColour(nodeColour);
+	g.drawRect(getLocalBounds(), (int)LayoutTools::getCableThickness(lod));
+
+	if(lod != 0)
+	{
+		g.setColour(nodeColour.withAlpha(0.1f));
+		g.drawRect(getLocalBounds(), 20);
+	}
+	
 	auto tb = getLocalBounds();
 	tb.removeFromTop(Helpers::HeaderHeight);
 	tb = tb.removeFromTop(Helpers::SignalHeight).removeFromLeft(Helpers::ParameterMargin + Helpers::ParameterWidth - 25).reduced(0, 2);
 
-	g.setColour(nodeColour);
-	description.draw(g, tb.toFloat());
-
+	if(lod == 0)
+	{
+		g.setColour(nodeColour);
+		description.draw(g, tb.toFloat());
+	}
+	
 	auto root = findParentComponentOfClass<DspNetworkComponent>();
 
 	if (root->currentlyHoveredContainer != nullptr)
@@ -398,7 +409,8 @@ void ContainerComponent::paint(Graphics& g)
 		}
 	}
 
-	drawOutsideLabel(g);
+	if(lod == 0)
+		drawOutsideLabel(g);
 
 	g.setColour(Helpers::getNodeColour(data));
 	cables.draw(g);
@@ -415,16 +427,26 @@ void ContainerComponent::paint(Graphics& g)
 			g.drawRoundedRectangle(tb, 3.0f, 1.0f);
 		}
 
-		auto b = cn->getBoundsInParent().toFloat().expanded(1.0f);
-		g.setColour(Colours::black.withAlpha(0.2f));
-
-		std::array<float, 5> alphas = { 0.25f, 0.15f, 0.1f, 0.05f, 0.02f };
-
-		for(int i = 0; i < 5; i++)
+		if(lod == 0)
 		{
-			g.setColour(Colours::black.withAlpha(alphas[i]));
-			g.drawRect(b, 2.0f);
-			b = b.translated(0.0f, 0.5f).expanded(0.25f);
+			auto b = cn->getBoundsInParent().toFloat().expanded(1.0f);
+			g.setColour(Colours::black.withAlpha(0.2f));
+
+			std::array<float, 5> alphas = { 0.25f, 0.15f, 0.1f, 0.05f, 0.02f };
+
+			auto isContainer = Helpers::isContainerNode(cn->getValueTree());
+
+			for (int i = 0; i < 2; i++)
+			{
+				g.setColour(Colours::black.withAlpha(alphas[i]));
+
+				if(isContainer)
+					g.drawRect(b, 2.0f);
+				else
+					g.fillRect(b);
+
+				b = b.translated(0.0f, 1.0f).expanded(0.5f);
+			}
 		}
 	}
 

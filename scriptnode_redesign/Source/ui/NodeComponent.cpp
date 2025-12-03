@@ -343,7 +343,7 @@ void NodeComponent::HeaderComponent::BreadcrumbButton::mouseUp(const MouseEvent&
 {
 	auto zp = findParentComponentOfClass<ZoomableViewport>();
 	auto root = valuetree::Helpers::getRoot(data);
-	zp->setNewContent(new DspNetworkComponent(root, data), nullptr);
+	zp->setNewContent(new DspNetworkComponent(*zp, root, data), nullptr);
 }
 
 void NodeComponent::onFold(const Identifier& id, const var& newValue)

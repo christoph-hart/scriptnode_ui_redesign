@@ -188,60 +188,88 @@ struct ContainerComponent : public NodeComponent,
 			isForcedVertical = type == CableSetup::ContainerType::Serial && Helpers::isVerticalContainer(parent.getValueTree());
 		}
 
-		static void drawSignalCable(Graphics& g, Point<float> p1, Point<float> p2, Colour c, bool preferLines, int channelIndex, int numChannels, float cableOffset)
+		struct CableDrawData
 		{
-			Path p;
+			Point<float> p1;
+			Point<float> p2;
+			Colour c;
+			int channelIndex;
+			int numChannels;
+			float cableOffset;
+			int lod;
 
-			if(preferLines)
+			void setCoordinates(Point<float> p1_, Point<float> p2_, float cableOffset_, int channelIndex_)
 			{
-				p.startNewSubPath(p1);
-				p.lineTo(p2);
+				p1 = p1_;
+				p2 = p2_;
+				cableOffset = cableOffset_;
+				channelIndex = channelIndex_;
 			}
-			else
+
+			void draw(Graphics& g, bool preferLines)
 			{
-				float offset = 0.0f;
+				Path p;
 
-				auto sShape = p2.getX() < p1.getX();
-
-				if (numChannels > 1)
+				if (preferLines)
 				{
-					if (sShape)
+					p.startNewSubPath(p1);
+					p.lineTo(p2);
+				}
+				else
+				{
+					float offset = 0.0f;
+
+					auto sShape = p2.getX() < p1.getX();
+
+					if (numChannels > 1)
 					{
-						auto fullOffset = -6.0f;
+						if (sShape)
+						{
+							auto fullOffset = -6.0f;
 
-						auto sOffset = (1.0f - (float)channelIndex / (float)numChannels) * fullOffset;
+							auto sOffset = (1.0f - (float)channelIndex / (float)numChannels) * fullOffset;
 
-						p1 = p1.translated(sOffset, 0.0f);
-						p2 = p2.translated(-sOffset, 0.0f);
+							p1 = p1.translated(sOffset, 0.0f);
+							p2 = p2.translated(-sOffset, 0.0f);
+						}
+						else
+						{
+							auto maxWidth = jmin((float)Helpers::SignalHeight * 0.25f, 0.8f * std::abs((p2.getX() - p1.getX())));
+
+							float normalisedChannelIndex = (float)channelIndex / (float)(numChannels - 1);
+							offset = maxWidth * (-0.5f + normalisedChannelIndex);
+
+							if (p2.getY() > p1.getY())
+								offset *= -1.0f;
+						}
 					}
-					else
-					{
-						auto maxWidth = jmin((float)Helpers::SignalHeight * 0.25f, 0.8f * std::abs((p2.getX() - p1.getX())));
 
-						float normalisedChannelIndex = (float)channelIndex / (float)(numChannels - 1);
-						offset = maxWidth * (-0.5f + normalisedChannelIndex);
+					offset += cableOffset;
 
-						if (p2.getY() > p1.getY())
-							offset *= -1.0f;
-					}
+					p.startNewSubPath(p1);
+
+					Helpers::createCustomizableCurve(p, p1, p2, offset, 5.0f);
 				}
 
-				offset += cableOffset;
+				
+				PathStrokeType::EndCapStyle sp = PathStrokeType::EndCapStyle::butt;
 
-				p.startNewSubPath(p1);
+				auto strokeDepth = LayoutTools::getCableThickness(lod);
 
-				Helpers::createCustomizableCurve(p, p1, p2, offset, 5.0f);
+				if(lod == 0)
+				{
+
+					g.setColour(Colours::black.withAlpha(0.7f));
+					g.fillEllipse(Rectangle<float>(p1, p1).withSizeKeepingCentre(4.0f, 4.0f));
+					g.fillEllipse(Rectangle<float>(p2, p2).withSizeKeepingCentre(4.0f, 4.0f));
+					g.strokePath(p, PathStrokeType(3.0f));
+					sp = PathStrokeType::rounded;
+				}
+				
+				g.setColour(c);
+				g.strokePath(p, PathStrokeType(strokeDepth, PathStrokeType::beveled, sp));
 			}
-
-			g.setColour(Colours::black.withAlpha(0.7f));
-			g.fillEllipse(Rectangle<float>(p1, p1).withSizeKeepingCentre(4.0f, 4.0f));
-			g.fillEllipse(Rectangle<float>(p2, p2).withSizeKeepingCentre(4.0f, 4.0f));
-
-			g.strokePath(p, PathStrokeType(3.0f));
-			g.setColour(c);
-
-			g.strokePath(p, PathStrokeType(1.0f, PathStrokeType::beveled, PathStrokeType::rounded));
-		}
+		};
 
 		bool isVertical() const
 		{
@@ -293,6 +321,8 @@ struct ContainerComponent : public NodeComponent,
 			return 0.0f;
 		}
 
+		int lod = 0;
+
 		void draw(Graphics& g)
 		{
 			auto colour = Helpers::getNodeColour(parent.getValueTree());
@@ -301,6 +331,11 @@ struct ContainerComponent : public NodeComponent,
 				return;
 
 			const auto delta = (float)(Helpers::SignalHeight) / (float)numChannels;
+
+			CableDrawData cd;
+			cd.lod = LODManager::getLOD(parent);
+			cd.numChannels = numChannels;
+			cd.c = colour;
 
 			auto xOffset = 10.0f;
 
@@ -313,19 +348,27 @@ struct ContainerComponent : public NodeComponent,
 				s = s.withSizeKeepingCentre(pinSize, pinSize).translated(xOffset, c * delta + delta * 0.5f);
 				e = e.withSizeKeepingCentre(pinSize, pinSize).translated(-xOffset, c * delta + delta * 0.5f);
 
-				g.setColour(Colours::grey);
-				PathFactory::scalePath(pin, s);
-				g.fillPath(pin);
-
-				if(type != ContainerType::ModChain)
+				if(cd.lod == 0)
 				{
-					PathFactory::scalePath(pin, e);
+					g.setColour(Colours::grey);
+					PathFactory::scalePath(pin, s);
 					g.fillPath(pin);
+
+					if (type != ContainerType::ModChain)
+					{
+						PathFactory::scalePath(pin, e);
+						g.fillPath(pin);
+					}
 				}
+				
+				
 
 				if (!routeThroughChildNodes())
 				{
-					drawSignalCable(g, s.getCentre(), e.getCentre(), colour, true, c, numChannels, 0.0f);
+					cd.setCoordinates(s.getCentre(), e.getCentre(), 0.0f, c);
+					cd.draw(g, true);
+
+					//drawSignalCable(g, s.getCentre(), e.getCentre(), colour, true, c, numChannels, 0.0f);
 				}
 			}
 
@@ -348,7 +391,10 @@ struct ContainerComponent : public NodeComponent,
 						auto p1 = pinPositions.containerStart.translated(xOffset, 0.0f);
 						auto p2 = firstPos.first;
 						auto o = getCableOffset(0, p1, p2);
-						drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour, false, c, numChannels, o);
+
+						cd.setCoordinates(p1.translated(0, offset), p2.translated(0, offset), o, c);
+						cd.draw(g, false);
+						//drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour, false, c, numChannels, o);
 						offset += delta;
 					}
 				}
@@ -365,7 +411,10 @@ struct ContainerComponent : public NodeComponent,
 						for (int c = 0; c < numChannels; c++)
 						{
 							auto o = getCableOffset(i+1, p1, p2);
-							drawSignalCable(g, p1.translated(offset, 0), p2.translated(offset, 0), colour, true, c, numChannels, o);
+
+							cd.setCoordinates(p1.translated(offset, 0), p2.translated(offset, 0), o, c);
+							cd.draw(g, true);
+							//drawSignalCable(g, p1.translated(offset, 0), p2.translated(offset, 0), colour, true, c, numChannels, o);
 							offset += delta;
 						}
 					}
@@ -376,7 +425,9 @@ struct ContainerComponent : public NodeComponent,
 						for (int c = 0; c < numChannels; c++)
 						{
 							auto o = getCableOffset(i+1, p1, p2);
-							drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour, false, c, numChannels, o);
+							cd.setCoordinates(p1.translated(0, offset), p2.translated(0, offset), o, c);
+							cd.draw(g, false);
+							//drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour, false, c, numChannels, o);
 							offset += delta;
 						}
 					}
@@ -394,7 +445,9 @@ struct ContainerComponent : public NodeComponent,
 						auto p2 = pinPositions.containerEnd;
 
 						auto o = getCableOffset(pinPositions.childPositions.size(), p1, p2);
-						drawSignalCable(g, p1.translated(0, offset), p2.translated(-xOffset, offset), colour, false, c, numChannels, o);
+						cd.setCoordinates(p1.translated(0, offset), p2.translated(-xOffset, offset), o, c);
+						cd.draw(g, false);
+						//drawSignalCable(g, p1.translated(0, offset), p2.translated(-xOffset, offset), colour, false, c, numChannels, o);
 						offset += delta;
 					}
 				}
@@ -418,8 +471,22 @@ struct ContainerComponent : public NodeComponent,
 						auto p2 = pinPositions.childPositions[i].first.translated(0, targetOffset);
 						auto p3 = pinPositions.childPositions[i].second.translated(0, targetOffset);
 						auto p4 = pinPositions.containerEnd.translated(-xOffset, offset);
-						drawSignalCable(g, p1, p2, colour, false, cIndex, numChannels, 0.0f);
-						drawSignalCable(g, p3, p4, colour, false, cIndex, numChannels, 0.0f);
+
+						cd.channelIndex = cIndex;
+						cd.cableOffset = 0.0f;
+
+						cd.p1 = p1;
+						cd.p2 = p2;
+
+						cd.draw(g, false);
+
+						cd.p1 = p3;
+						cd.p2 = p4;
+
+						cd.draw(g, false);
+
+						//drawSignalCable(g, p1, p2, colour, false, cIndex, numChannels, 0.0f);
+						//drawSignalCable(g, p3, p4, colour, false, cIndex, numChannels, 0.0f);
 
 						cIndex++;
 					}

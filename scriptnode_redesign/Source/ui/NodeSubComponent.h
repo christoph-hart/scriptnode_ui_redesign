@@ -205,6 +205,48 @@ struct ParameterComponent : public CablePinBase,
 			g.fillRoundedRectangle(button.getLocalBounds().toFloat().reduced(2, 1), 3.0f);
 		}
 
+		void drawRotarySlider(Graphics &g, int x, int y, int width, int height, float sliderPosProportional, float rotaryStartAngle, float rotaryEndAngle, Slider &s)
+		{
+			auto lod = LODManager::getLOD(s);
+
+			if(lod <= 1)
+			{
+				GlobalHiseLookAndFeel::drawRotarySlider(g, x, y, width, height, sliderPosProportional, rotaryStartAngle, rotaryEndAngle, s);
+			}
+			else
+			{
+
+
+				g.setColour(Colour(0xFF111118));
+
+				Path track, value;
+				track.startNewSubPath({0.0f, 0.0f});
+				track.startNewSubPath({1.0f, 1.0f});
+				value.startNewSubPath({ 0.0f, 0.0f });
+				value.startNewSubPath({ 1.0f, 1.0f });
+
+				track.addArc(0.0f, 0.0f, 1.0f, 1.0f, rotaryStartAngle, rotaryEndAngle, true);
+				value.addArc(0.0f, 0.0f, 1.0f, 1.0f, rotaryStartAngle, rotaryStartAngle + sliderPosProportional * (rotaryEndAngle - rotaryStartAngle), true);
+
+				track.scaleToFit(x+5, y+5, width-10, height-10, true);
+				value.scaleToFit(x+5, y+5, width-10, height-10, true);
+
+				g.strokePath(track, PathStrokeType(5.0f));
+
+				auto down = s.isMouseButtonDown();
+
+				auto rColour = (down ? 0xFF9099AA : 0xFF808899);
+				auto c = Colour(rColour);
+				auto ringColour = c.withAlpha(0.5f + sliderPosProportional * 0.5f);
+				
+				g.setColour(ringColour);
+				g.strokePath(value, PathStrokeType(3.0f));
+
+
+				//g.fillEllipse(s.getLocalBounds().reduced(4.0f).toFloat());
+			}
+		}
+
 		void drawButtonText(Graphics &g, TextButton &button, bool over, bool down) override
 		{
 			float alpha = 0.4f;
@@ -358,15 +400,18 @@ struct ParameterComponent : public CablePinBase,
 
 	void paint(Graphics& g) override
 	{
+		auto lod = LODManager::getLOD(*this);
+
 		if (draggingEnabled)
 		{
 			g.setColour(ParameterHelpers::getParameterColour(data));
-			g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(3.0f, 0.0f).removeFromRight(4.0f), 2.0f);
+
+			LayoutTools::fillRoundedRectangle(g, lod, getLocalBounds().toFloat().reduced(3.0f, 0.0f).removeFromRight(4.0f), 2.0f);
 
 			g.setColour(Colours::white.withAlpha(0.5f));
 			auto pb = getLocalBounds().removeFromRight(getHeight()).toFloat().reduced(10.0f);
 			scalePath(targetIcon, pb);
-			g.fillPath(targetIcon);
+			LayoutTools::fillPathOrEllipse(g, lod, targetIcon);
 		}
 
 		drawBlinkState(g);
@@ -402,22 +447,21 @@ struct ParameterComponent : public CablePinBase,
 			
 
 			g.setColour(Colours::white.withAlpha(0.5f));
-			g.drawText(rootId, nb.reduced(3.0f, 0.0f), Justification::left);
+
+			LayoutTools::drawTextWithLOD(g, lod, rootId, nb.reduced(3.0f, 0.0f), Justification::left);
 		}
 		else
 		{
 			g.setFont(GLOBAL_FONT());
 			g.setColour(Colours::white.withAlpha(0.6f));
-			g.drawText(slider.getTextFromValue(slider.getValue()), tb.reduced(0.0f, 2.0f), Justification::bottomLeft);
+
+			LayoutTools::drawTextWithLOD(g, lod, slider.getTextFromValue(slider.getValue()), tb.reduced(0.0f, 2.0f), Justification::bottomLeft);
 		}
 		
 		g.setFont(GLOBAL_BOLD_FONT());
 		g.setColour(Colours::white.withAlpha(0.8f));
 		
-		g.drawText(name, tb.reduced(0.0f, 2.0f), Justification::topLeft);
-		
-
-		
+		LayoutTools::drawTextWithLOD(g, lod, name, tb.reduced(0.0f, 2.0f), Justification::topLeft);
 	}
 
 	Helpers::ConnectionType getConnectionType() const override { return Helpers::ConnectionType::Parameter; };
@@ -506,7 +550,8 @@ struct LockedTarget: public CablePinBase
 		g.setColour(Colours::white.withAlpha(0.5f));
 		g.setFont(GLOBAL_FONT());
 		
-		g.drawText(getSourceDescription(), getLocalBounds().toFloat().reduced(5.0f, 0.0f), Justification::left);
+		auto lod = LODManager::getLOD(*this);
+		LayoutTools::drawTextWithLOD(g, lod, getSourceDescription(), getLocalBounds().toFloat().reduced(5.0f, 0.0f), Justification::left);
 	}
 
 	ValueTree getConnectionTree() const override
@@ -560,19 +605,20 @@ struct ModulationBridge: public CablePinBase
 
 		auto c = Helpers::getNodeColour(sourceNode);
 
+		auto lod = LODManager::getLOD(*this);
+
 		g.setColour(c);
-		g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(3.0f, 0.0f).removeFromRight(4.0f), 2.0f);
+
+		LayoutTools::fillRoundedRectangle(g, lod, getLocalBounds().toFloat().reduced(3.0f, 0.0f).removeFromRight(4.0f), 2.0f);
 
 		auto b = getLocalBounds().toFloat();
 		auto tb = b.removeFromRight(getHeight()).toFloat();
 
 		scalePath(targetIcon, tb.reduced(10.0f));
 
-		g.fillPath(targetIcon);
+		LayoutTools::fillPathOrEllipse(g, lod, targetIcon);
 
 		auto rb = b.reduced(0, 5);
-
-
 
 		g.setColour(c.withAlpha(0.05f));
 		g.fillRect(rb);
@@ -584,8 +630,7 @@ struct ModulationBridge: public CablePinBase
 		String label = "from " + getSourceDescription();
 		b.removeFromLeft(5);
 
-		g.setFont(GLOBAL_FONT());
-		g.drawText(label, b, Justification::left);
+		LayoutTools::drawTextWithLOD(g, lod, label, b, Justification::left);
 	}
 
 	bool canBeTarget() const override { return true; }
@@ -646,6 +691,8 @@ struct ModOutputComponent : public CablePinBase
 		g.setColour(Colours::white.withAlpha(isMouseOver() ? 0.8f : 0.5f));
 		g.setFont(GLOBAL_BOLD_FONT());
 
+		auto lod = LODManager::getLOD(*this);
+
 		drawBlinkState(g);
 
 		auto b = getLocalBounds().toFloat();
@@ -653,12 +700,9 @@ struct ModOutputComponent : public CablePinBase
 
 		scalePath(targetIcon, tb.reduced(8.0f));
 
-		g.fillPath(targetIcon);
-
-		g.drawText(getSourceDescription().fromFirstOccurrenceOf(".", false, false), b, Justification::right);
+		LayoutTools::fillPathOrEllipse(g, lod, targetIcon);
+		LayoutTools::drawTextWithLOD(g, lod, getSourceDescription().fromFirstOccurrenceOf(".", false, false), b, Justification::right);
 	}
-
-	
 
 	ValueTree getConnectionTree() const override
 	{

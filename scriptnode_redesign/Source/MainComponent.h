@@ -48,27 +48,26 @@ using namespace juce;
 
 TODO:
 
-- make snap markers & auto align to cables & other nodes
+- make snap markers & auto align to cables & other nodes OK
+- add grid for rasterized movements OK
+- remove screenshots from database OK
+- implement LOD system for better rendering with big patches OK
+- fix selection with folded containers OK
+- add parameter popup with sliders ("P") OK
 
-- add grid for rasterized movements
-- fix selection with folded containers
+BUGS:
+
 - fix alignment & distribution with folded containers
+- fix cables being displayed for folded containers
+- fix reset mixing up process node positions despite lock
+
+FEATURES:
 
 - add icons for autocomplete popup: polyphony, midi, complex data, unscaled, mod output
-- remove screenshots from database
-
 - add parameter management tools (add / remove, rename / range / grouping)
-
-- implement LOD system for better rendering with big patches
-
-
-
-
-
-- add parameter popup with sliders ("P")
+- add double click on connection to goto source / target
 - add context menu with actions
-
-- add dynamic process signal flag with path stuff for extra_mods (all nodes that have a ProcessSignal parameter)
+- add dynamic process signal flag with path stuff for extra_mods (all nodes that have a ProcessSignal / AddToSignal parameter)
 
 
 */

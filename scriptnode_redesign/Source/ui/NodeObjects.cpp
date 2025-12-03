@@ -40,6 +40,7 @@ LockedContainerComponent::LockedContainerComponent(Lasso* l, const ValueTree& v,
 	ProcessNodeComponent(l, v, um_),
 	gotoButton("goto", nullptr, *this)
 {
+	setOpaque(true);
 	for (auto cn : v.getChildWithName(PropertyIds::Nodes))
 	{
 		if (Helpers::getFactoryPath(cn).second == "locked_mod")
