@@ -40,7 +40,10 @@ using namespace juce;
 
 
 
-struct ContainerComponent : public NodeComponent
+
+
+struct ContainerComponent : public NodeComponent,
+							public ContainerComponentBase
 {
 	struct CableSetup
 	{
@@ -63,37 +66,6 @@ struct ContainerComponent : public NodeComponent
 
 		struct Pins
 		{
-			std::vector<std::pair<Rectangle<int>, int>> makeHitZones(Rectangle<int> fullBounds, bool vertical) const
-			{
-				std::vector<std::pair<Rectangle<int>, int>> hz;
-
-				if (childPositions.empty())
-				{
-					hz.push_back({ Rectangle<float>(containerStart, containerEnd).toNearestInt(), 0 });
-				}
-				else
-				{
-					hz.push_back({ Rectangle<float>(containerStart, childPositions[0].first).toNearestInt(), 0 });
-
-					for (int i = 0; i < childPositions.size() - 1; i++)
-					{
-						hz.push_back({ Rectangle<float>(childPositions[i].second,
-							childPositions[i + 1].first).toNearestInt(), childPositions[i].dropIndex + 1});
-					}
-
-					hz.push_back({ Rectangle<float>(childPositions.back().second, containerEnd).toNearestInt(), childPositions.back().dropIndex +1 });
-				}
-
-				for (auto& h : hz)
-				{
-					h.first.setWidth(jmax(h.first.getWidth(), Helpers::SignalHeight));
-					h.first.setHeight(jmax(h.first.getHeight(), Helpers::SignalHeight));
-					//h.first = h.first.expanded(0, Helpers::SignalHeight).constrainedWithin(fullBounds);
-				}
-
-				return hz;
-			}
-
 			Point<float> containerStart;
 			Point<float> containerEnd;
 
@@ -131,7 +103,6 @@ struct ContainerComponent : public NodeComponent
 		{
 			connections.clear();
 
-			
 			numNodes = v.getChildWithName(PropertyIds::Nodes).getNumChildren();
 			numChannels = Helpers::getNumChannels(v);
 
@@ -217,17 +188,54 @@ struct ContainerComponent : public NodeComponent
 			isForcedVertical = type == CableSetup::ContainerType::Serial && Helpers::isVerticalContainer(parent.getValueTree());
 		}
 
-		static void drawSignalCable(Graphics& g, Point<float> p1, Point<float> p2, Colour c, bool preferLines)
+		static void drawSignalCable(Graphics& g, Point<float> p1, Point<float> p2, Colour c, bool preferLines, int channelIndex, int numChannels, float cableOffset)
 		{
 			Path p;
 
-			p.startNewSubPath(p1);
-			g.setColour(Colours::black.withAlpha(0.7f));
+			if(preferLines)
+			{
+				p.startNewSubPath(p1);
+				p.lineTo(p2);
+			}
+			else
+			{
+				float offset = 0.0f;
 
+				auto sShape = p2.getX() < p1.getX();
+
+				if (numChannels > 1)
+				{
+					if (sShape)
+					{
+						auto fullOffset = -6.0f;
+
+						auto sOffset = (1.0f - (float)channelIndex / (float)numChannels) * fullOffset;
+
+						p1 = p1.translated(sOffset, 0.0f);
+						p2 = p2.translated(-sOffset, 0.0f);
+					}
+					else
+					{
+						auto maxWidth = jmin((float)Helpers::SignalHeight * 0.25f, 0.8f * std::abs((p2.getX() - p1.getX())));
+
+						float normalisedChannelIndex = (float)channelIndex / (float)(numChannels - 1);
+						offset = maxWidth * (-0.5f + normalisedChannelIndex);
+
+						if (p2.getY() > p1.getY())
+							offset *= -1.0f;
+					}
+				}
+
+				offset += cableOffset;
+
+				p.startNewSubPath(p1);
+
+				Helpers::createCustomizableCurve(p, p1, p2, offset, 5.0f);
+			}
+
+			g.setColour(Colours::black.withAlpha(0.7f));
 			g.fillEllipse(Rectangle<float>(p1, p1).withSizeKeepingCentre(4.0f, 4.0f));
 			g.fillEllipse(Rectangle<float>(p2, p2).withSizeKeepingCentre(4.0f, 4.0f));
-
-			Helpers::createCurve(p, p1, p2, preferLines);
 
 			g.strokePath(p, PathStrokeType(3.0f));
 			g.setColour(c);
@@ -260,47 +268,29 @@ struct ContainerComponent : public NodeComponent
 			}
 
 			parent.repaint();
+		}
 
-#if 0
-			dragPosition = currentlyDraggedNodeBounds;
+		float getCableOffset(int nodeIndex, Point<float> p1, Point<float> p2) const
+		{
+			return getCableOffset(nodeIndex, std::abs(p2.getX() - p1.getX()));
+		}
 
-			dropIndex = -1;
-			dragRuler = {};
+		float getCableOffset(int nodeIndex, float maxWidth) const
+		{
+			ValueTree n;
 
-			auto hitzones = pinPositions.makeHitZones(parent.getLocalBounds(), isVertical());
+			if(nodeIndex == 0)
+				n = parent.getValueTree().getChildWithName(PropertyIds::Nodes);
+			else
+				n = parent.getValueTree().getChildWithName(PropertyIds::Nodes).getChild(nodeIndex - 1);
 
-			if (!dragPosition.isEmpty())
+			if(n.isValid())
 			{
-				for (const auto& hz : hitzones)
-				{
-					if(hz.first.contains(downPos))
-					//if (!dragPosition.getIntersection(hz.first).isEmpty())
-					{
-						dropIndex = hz.second;
-
-						Rectangle<float> rb;
-
-						if (isVertical())
-						{
-							rb = { 3.0f, (float)hz.first.getCentreY(), (float)parent.getWidth() - 6.0f, 3.0f };
-						}
-						else
-						{
-							rb = { (float)hz.first.getCentreX(),
-								   (float)Helpers::HeaderHeight + 5.0f,
-								   3.0f,
-								   (float)parent.getHeight() - 6.0f - (float)Helpers::HeaderHeight };
-						}
-
-						dragRuler = rb;
-						break;
-					}
-				}
+				auto v = (float)n[UIPropertyIds::CableOffset];
+				return jlimit(-maxWidth * 0.4f, maxWidth * 0.4f, v);
 			}
-#endif
 
-			parent.repaint();
-
+			return 0.0f;
 		}
 
 		void draw(Graphics& g)
@@ -335,7 +325,7 @@ struct ContainerComponent : public NodeComponent
 
 				if (!routeThroughChildNodes())
 				{
-					drawSignalCable(g, s.getCentre(), e.getCentre(), colour, true);
+					drawSignalCable(g, s.getCentre(), e.getCentre(), colour, true, c, numChannels, 0.0f);
 				}
 			}
 
@@ -357,7 +347,8 @@ struct ContainerComponent : public NodeComponent
 					{
 						auto p1 = pinPositions.containerStart.translated(xOffset, 0.0f);
 						auto p2 = firstPos.first;
-						drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour, false);
+						auto o = getCableOffset(0, p1, p2);
+						drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour, false, c, numChannels, o);
 						offset += delta;
 					}
 				}
@@ -373,7 +364,8 @@ struct ContainerComponent : public NodeComponent
 
 						for (int c = 0; c < numChannels; c++)
 						{
-							drawSignalCable(g, p1.translated(offset, 0), p2.translated(offset, 0), colour, true);
+							auto o = getCableOffset(i+1, p1, p2);
+							drawSignalCable(g, p1.translated(offset, 0), p2.translated(offset, 0), colour, true, c, numChannels, o);
 							offset += delta;
 						}
 					}
@@ -383,7 +375,8 @@ struct ContainerComponent : public NodeComponent
 
 						for (int c = 0; c < numChannels; c++)
 						{
-							drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour, false);
+							auto o = getCableOffset(i+1, p1, p2);
+							drawSignalCable(g, p1.translated(0, offset), p2.translated(0, offset), colour, false, c, numChannels, o);
 							offset += delta;
 						}
 					}
@@ -399,13 +392,17 @@ struct ContainerComponent : public NodeComponent
 					{
 						auto p1 = lastPos.second;
 						auto p2 = pinPositions.containerEnd;
-						drawSignalCable(g, p1.translated(0, offset), p2.translated(-xOffset, offset), colour, false);
+
+						auto o = getCableOffset(pinPositions.childPositions.size(), p1, p2);
+						drawSignalCable(g, p1.translated(0, offset), p2.translated(-xOffset, offset), colour, false, c, numChannels, o);
 						offset += delta;
 					}
 				}
 			}
 			else
 			{
+				int cIndex = 0;
+
 				for (int i = 0; i < connections.size(); i++)
 				{
 					std::vector<Connection> con = connections[i];
@@ -421,8 +418,10 @@ struct ContainerComponent : public NodeComponent
 						auto p2 = pinPositions.childPositions[i].first.translated(0, targetOffset);
 						auto p3 = pinPositions.childPositions[i].second.translated(0, targetOffset);
 						auto p4 = pinPositions.containerEnd.translated(-xOffset, offset);
-						drawSignalCable(g, p1, p2, colour, false);
-						drawSignalCable(g, p3, p4, colour, false);
+						drawSignalCable(g, p1, p2, colour, false, cIndex, numChannels, 0.0f);
+						drawSignalCable(g, p3, p4, colour, false, cIndex, numChannels, 0.0f);
+
+						cIndex++;
 					}
 				}
 			}
@@ -441,15 +440,13 @@ struct ContainerComponent : public NodeComponent
 		Pins pinPositions;
 	};
 
-	ContainerComponent(Lasso& l, const ValueTree& v, UndoManager* um_) :
+	ContainerComponent(Lasso* l, const ValueTree& v, UndoManager* um_) :
 		NodeComponent(l, v, um_, true),
 		cables(*this, v),
 		resizer(this),
 		lockButton("lock", nullptr, *this),
 		parameterDragger(*this)
 	{
-		
-
 		addAndMakeVisible(resizer);
 		addAndMakeVisible(lockButton);
 
@@ -457,11 +454,11 @@ struct ContainerComponent : public NodeComponent
 
 		lockButton.setToggleModeWithColourChange(true);
 
-		lockButton.setToggleStateAndUpdateIcon((bool)v[UIPropertyIds::Locked]);
+		lockButton.setToggleStateAndUpdateIcon((bool)v[UIPropertyIds::LockPosition]);
 
 		lockButton.onClick = [this]()
 		{
-			toggle(UIPropertyIds::Locked);
+			toggle(UIPropertyIds::LockPosition);
 		};
 
 		setInterceptsMouseClicks(false, true);
@@ -477,12 +474,20 @@ struct ContainerComponent : public NodeComponent
 		verticalListener.setCallback(data,
 			{ PropertyIds::Value }, Helpers::UIMode, VT_BIND_RECURSIVE_PROPERTY_LISTENER(onIsVertical));
 
+		lockListener.setCallback(data.getChildWithName(PropertyIds::Nodes), { PropertyIds::Locked }, Helpers::UIMode, VT_BIND_RECURSIVE_PROPERTY_LISTENER(onChildLock));
+
 		resizer.setAlwaysOnTop(true);
 
 		childPositionListener.setCallback(v.getChildWithName(PropertyIds::Nodes), 
 			UIPropertyIds::Helpers::getPositionIds(), 
 			Helpers::UIMode, 
 			VT_BIND_RECURSIVE_PROPERTY_LISTENER(onChildPositionUpdate));
+
+		auto commentTree = getValueTree().getOrCreateChildWithName(UIPropertyIds::Comments, um);
+
+		freeCommentListener.setCallback(commentTree, Helpers::UIMode, VT_BIND_CHILD_LISTENER(onFreeComment));
+
+		channelListener.setCallback(v, { PropertyIds::CompileChannelAmount }, Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onChannel));
 
 		auto gt = getValueTree().getOrCreateChildWithName(UIPropertyIds::Groups, um);
 		groupListener.setCallback(gt, Helpers::UIMode, VT_BIND_CHILD_LISTENER(onGroup));
@@ -560,6 +565,40 @@ struct ContainerComponent : public NodeComponent
 		repaint();
 	}
 
+	void onFreeComment(const ValueTree& v, bool wasAdded)
+	{
+		if(wasAdded)
+		{
+			comments.add(new Comment(*this, v));
+		}
+		else
+		{
+			for(auto c: comments)
+			{
+				if(c->data == v)
+				{
+					comments.removeObject(c);
+					break;
+				}
+			}
+		}
+	}
+
+	void onChannel(const Identifier&, const var& newValue)
+	{
+		cables.init(getValueTree());
+		cables.updatePins(*this);
+	}
+
+	void onChildLock(const ValueTree& v, const Identifier& id)
+	{
+		if(Helpers::isImmediateChildNode(v, getValueTree()))
+		{
+			onChildAddRemove(v, false);
+			onChildAddRemove(v, true);
+		}
+	}
+
 	void rebuildDescription()
 	{
 		description.clear();
@@ -598,6 +637,12 @@ struct ContainerComponent : public NodeComponent
 			}
 			else
 			{
+				if(v.getType() == PropertyIds::Comment)
+				{
+					v.getParent().removeChild(v, um);
+					return;
+				}
+
 				for(auto c: comments)
 				{
 					if(c->data == v)
@@ -632,7 +677,7 @@ struct ContainerComponent : public NodeComponent
 	{
 		NodeComponent::onFold(id, newValue);
 
-		auto folded = (bool)newValue;
+		auto folded = (bool)newValue && !Helpers::isRootNode(getValueTree());
 
 		for(auto c: childNodes)
 			c->setVisible(!folded);
@@ -739,6 +784,16 @@ struct ContainerComponent : public NodeComponent
 		return ok;
 	}
 
+	CablePinBase* createOutsideParameterComponent(const ValueTree& source) override
+	{
+		auto conParent = ParameterHelpers::findConnectionParent(source);
+
+		if (conParent.getType() == PropertyIds::Parameter)
+			return new ParameterComponent(conParent, asNodeComponent().getUndoManager());
+		else
+			return new ModulationBridge(conParent, asNodeComponent().getUndoManager());
+	}
+
 	ContainerComponent* getInnerContainer(Component* root, Point<int> rootPosition, Component* toSkip)
 	{
 		if(this == toSkip)
@@ -763,11 +818,13 @@ struct ContainerComponent : public NodeComponent
 		return nullptr;
 	}
 
+	
+
 	void resized() override
 	{
 		NodeComponent::resized();
 
-		auto showBottomTools = !(bool)data[PropertyIds::Folded] && !Helpers::isRootNode(data);
+		auto showBottomTools = !Helpers::isFoldedOrLockedContainer(getValueTree());
 
 		lockButton.setVisible(showBottomTools);
 		resizer.setVisible(showBottomTools);
@@ -778,7 +835,7 @@ struct ContainerComponent : public NodeComponent
 		cables.updatePins(*this);
 		lockButton.setBounds(bar.removeFromRight(15));
 
-		auto yOffset = jmax(Helpers::HeaderHeight + Helpers::SignalHeight, (int)data[UIPropertyIds::ParameterYOffset]);
+		auto yOffset = jmax(Helpers::HeaderHeight + Helpers::SignalHeight, (int)data[UIPropertyIds::ParameterYOffset] + 2 * Helpers::ParameterMargin);
 
 		for(auto p: parameters)
 		{
@@ -787,22 +844,7 @@ struct ContainerComponent : public NodeComponent
 			yOffset += p->getHeight();
 		}
 
-		if(!outsideParameters.isEmpty())
-		{
-			if(parameters.isEmpty())
-				yOffset += 10;
-
-			outsideLabel = { 0.0f, (float)yOffset, (float)(Helpers::ParameterMargin + Helpers::ParameterWidth), 20.0f };
-			yOffset += 20;
-		}
-
-		for(auto op: outsideParameters)
-		{
-			yOffset += Helpers::ParameterMargin;
-			op->setTopLeftPosition(op->getX(), yOffset);
-			yOffset += op->getHeight();
-			
-		}
+		positionOutsideParameters(yOffset);
 	}
 
 	struct ParameterVerticalDragger: public Component
@@ -821,9 +863,9 @@ struct ContainerComponent : public NodeComponent
 
 		void paint(Graphics& g) override
 		{
-			auto b = getLocalBounds().reduced(5, 3).toFloat();
+			auto b = getLocalBounds().reduced(20, 3).toFloat();
 
-			float alpha = 0.2f;
+			float alpha = 0.05f;
 
 			if(isMouseOverOrDragging())
 				alpha += 0.1f;
@@ -852,9 +894,27 @@ struct ContainerComponent : public NodeComponent
 
 	struct Comment : public Component
 	{
+		Comment(ContainerComponent& parent_, const ValueTree& d):
+		  parent(parent_),
+		  data(d),
+		  renderer("")
+		{
+			auto sd = renderer.getStyleData();
+			sd.fontSize = 14.0f;
+			renderer.setStyleData(sd);
+
+			positionListener.setCallback(data,
+			{ PropertyIds::Comment,
+				UIPropertyIds::CommentWidth,
+				UIPropertyIds::CommentOffsetX,
+				UIPropertyIds::CommentOffsetY,
+			}, Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onUpdate));
+
+			parent.addAndMakeVisible(this);
+		}
+
 		Comment(ContainerComponent& parent_, NodeComponent* attachedNode_) :
 			parent(parent_),
-			attachedNode(attachedNode_),
 			data(attachedNode_->getValueTree()),
 			renderer("")
 		{
@@ -928,6 +988,11 @@ struct ContainerComponent : public NodeComponent
 				data.setProperty(UIPropertyIds::CommentOffsetX, newOffset.getX(), parent.um);
 				data.setProperty(UIPropertyIds::CommentOffsetY, newOffset.getY(), parent.um);
 			}
+
+			if(data.getType() == PropertyIds::Comment)
+			{
+				expandParentsRecursive(*this, getBoundsInParent(), false);
+			}
 		}
 
 		void mouseExit(const MouseEvent& e) override
@@ -942,7 +1007,15 @@ struct ContainerComponent : public NodeComponent
 			   id == UIPropertyIds::CommentOffsetX || id == UIPropertyIds::CommentOffsetY)
 			{
 				currentOffset = CommentHelpers::getCommentOffset(data);
-				setTopLeftPosition(Helpers::getBounds(data, false).getTopRight().translated(10 + currentOffset.getX(), currentOffset.getY()));
+
+				if(data.getType() == PropertyIds::Comment)
+				{
+					setTopLeftPosition(currentOffset);
+				}
+				else
+				{
+					setTopLeftPosition(Helpers::getBounds(data, false).getTopRight().translated(10 + currentOffset.getX(), currentOffset.getY()));
+				}
 			}
 			
 			if(id == PropertyIds::NodeColour)
@@ -993,8 +1066,6 @@ struct ContainerComponent : public NodeComponent
 		valuetree::PropertyListener positionListener;
 
 		MarkdownRenderer renderer;
-
-		Component::SafePointer<NodeComponent> attachedNode;
 	};
 
 	OwnedArray<Comment> comments;
@@ -1029,12 +1100,32 @@ struct ContainerComponent : public NodeComponent
 		void mouseDown(const MouseEvent& e) override
 		{
 			SelectableComponent::Lasso::checkLassoEvent(e, SelectableComponent::LassoState::Down);
+
+			downOffset = getNodeBefore()[UIPropertyIds::CableOffset];
+			repaint();
+		}
+
+		ValueTree getNodeBefore()
+		{
+			if(index == 0)
+				return parent.getValueTree().getChildWithName(PropertyIds::Nodes);
+			else
+				return parent.getValueTree().getChildWithName(PropertyIds::Nodes).getChild(index-1);
 		}
 
 		void mouseDrag(const MouseEvent& e) override
 		{
 			SelectableComponent::Lasso::checkLassoEvent(e, SelectableComponent::LassoState::Drag);
+
+			setMouseCursor(MouseCursor::LeftRightResizeCursor);
+
+			auto dx = e.getDistanceFromDragStartX();
+
+			getNodeBefore().setProperty(UIPropertyIds::CableOffset, downOffset + dx, parent.um);
+			parent.repaint();
 		}
+
+		float downOffset = 0.0f;
 
 		int onNodeDrag(Point<float> lp)
 		{
@@ -1065,7 +1156,7 @@ struct ContainerComponent : public NodeComponent
 				g.strokePath(hitzone, PathStrokeType(1.0f));
 			}
 
-			if(active)
+			if(active && downOffset == 0.0f)
 			{
 				g.setColour(Colours::white.withAlpha(0.1f));
 				g.fillPath(hitzone);
@@ -1092,6 +1183,10 @@ struct ContainerComponent : public NodeComponent
 
 			auto a = Rectangle<float>(b.getCentre(), b.getCentre()).withSizeKeepingCentre(12.0f, 12.0f);
 
+			auto offset = (float)getNodeBefore()[UIPropertyIds::CableOffset];
+
+			a = a.translated(offset, 0.0f);
+
 			parent.scalePath(p, a);
 		}
 
@@ -1104,18 +1199,7 @@ struct ContainerComponent : public NodeComponent
 		const int index;
 	};
 
-	CablePinBase* getOutsideParameter(const ValueTree& pTree)
-	{
-		jassert(pTree.getType() == PropertyIds::Parameter);
-
-		for(auto op: outsideParameters)
-		{
-			if(op->data == pTree)
-				return op;
-		}
-		
-		return nullptr;
-	}
+	
 
 	static void expandParentsRecursive(Component& componentToShow, Rectangle<int> firstBoundsMightBeUnion, bool addMarginToFirst)
 	{
@@ -1152,30 +1236,10 @@ struct ContainerComponent : public NodeComponent
 		}
 	}
 
-	void rebuildOutsideParameters()
-	{
-		outsideParameters.clear();
+	
 
-		auto pTrees = Helpers::getAutomatedChildParameters(getValueTree());
-
-		
-
-		for(auto p: pTrees)
-		{
-			
-			auto np = new ParameterComponent(p, um);
-			outsideParameters.add(np);
-			addAndMakeVisible(np);
-		}
-
-		if(outsideParameters.size() != 0)
-			resized();
-
-		parameterDragger.setVisible(!parameters.isEmpty() || !outsideParameters.isEmpty());
-	}
-
-	Rectangle<float> outsideLabel;
-	OwnedArray<ParameterComponent> outsideParameters;
+	
+	
 
 	OwnedArray<AddButton> addButtons;
 	CableSetup cables;
@@ -1217,6 +1281,7 @@ struct ContainerComponent : public NodeComponent
 	OwnedArray<NodeComponent> childNodes;
 
 	valuetree::PropertyListener resizeListener;
+	valuetree::PropertyListener channelListener;
 	valuetree::ChildListener nodeListener;
 
 	valuetree::RecursivePropertyListener childPositionListener;
@@ -1228,6 +1293,9 @@ struct ContainerComponent : public NodeComponent
 	valuetree::RecursivePropertyListener verticalListener;
 
 	valuetree::ChildListener groupListener;
+	valuetree::ChildListener freeCommentListener;
+
+	valuetree::RecursivePropertyListener lockListener;
 
 	AttributedString description;
 

@@ -43,7 +43,7 @@ void ContainerComponent::CableSetup::updatePins(ContainerComponent& p)
 
 	pinPositions.childPositions.clear();
 
-	if(p.getValueTree()[PropertyIds::Folded])
+	if(Helpers::isFoldedOrLockedContainer(p.getValueTree()))
 	{
 		p.repaint();
 		return;
@@ -51,6 +51,51 @@ void ContainerComponent::CableSetup::updatePins(ContainerComponent& p)
 
 	int idx = 0;
 
+	Array<NodeComponent*> processNodes;
+
+	for(auto cn: p.childNodes)
+	{
+		if (cn == nullptr || cn->getParentComponent() != &parent) // probably dragged
+			continue;
+
+		if(Helpers::isProcessingSignal(cn->getValueTree()))
+		{
+			processNodes.add(cn);
+		}
+	}
+
+	for(int i = 0; i < processNodes.size(); i++)
+	{
+		auto cn = processNodes[i];
+		
+
+		if (isForcedVertical)
+		{
+			auto sb = cn->getBoundsInParent().toFloat();
+
+			Point<float> t1(sb.getCentreX(), sb.getY());
+			Point<float> t2(sb.getCentreX(), sb.getBottom());
+
+			auto first = i == 0;
+			auto last = i == processNodes.size()-1;
+
+			if (first)
+				t1 = { sb.getX(), sb.getY() + Helpers::HeaderHeight };
+
+			if (last)
+				t2 = { sb.getRight(), sb.getY() + Helpers::HeaderHeight };
+
+			pinPositions.childPositions.push_back({ t1, t2, i });
+		}
+		else
+		{
+			Rectangle<float> sb(0.0f, (float)Helpers::HeaderHeight, (float)cn->getWidth(), (float)Helpers::SignalHeight);
+			sb = p.getLocalArea(cn, sb);
+			pinPositions.childPositions.push_back({ sb.getTopLeft(), sb.getTopRight(), i });
+		}
+	}
+
+#if 0
 	for (auto cn : p.childNodes)
 	{
 		if (cn->getParentComponent() != &parent) // probably dragged
@@ -88,6 +133,7 @@ void ContainerComponent::CableSetup::updatePins(ContainerComponent& p)
 
 		idx++;
 	}
+#endif
 
 	
 
@@ -104,8 +150,24 @@ void ContainerComponent::CableSetup::updatePins(ContainerComponent& p)
 	{
 		Path p;
 
+		auto sh = (float)Helpers::SignalHeight;
+		auto offset = getCableOffset(dropIndex, s, e);
+
 		if(isVertical)		
 		{
+			auto s1 = s.translated(sh * -0.5f, 0.0f);
+			auto s2 = s.translated(sh * 0.5f, 0.0f);
+
+			auto e1 = e.translated(sh * -0.5f, 0.0f);
+			auto e2 = e.translated(sh * 0.5f, 0.0f);
+
+			p.startNewSubPath(s1);
+			p.lineTo(s2);
+			p.lineTo(e2);
+			p.lineTo(e1);
+			p.closeSubPath();
+
+#if 0
 			auto s1 = s.translated((float)Helpers::SignalHeight * -0.5f, 0.0f);
 			auto s2 = s.translated((float)Helpers::SignalHeight *  0.5f, 0.0f);
 
@@ -113,22 +175,68 @@ void ContainerComponent::CableSetup::updatePins(ContainerComponent& p)
 			auto e2 = e.translated((float)Helpers::SignalHeight * 0.5f, 0.0f);
 
 			p.startNewSubPath(s1);
-			Helpers::createCurve(p, s1, e1, true);
+
+			Helpers::createCustomizableCurve(p, s1, e1, 0.0f, 2.0f, false);
+			//Helpers::createCurve(p, s1, e1, true);
 			p.lineTo(e2);
-			Helpers::createCurve(p, e2, s2, true);
+			Helpers::createCustomizableCurve(p, e2, s2, 0.0f, 2.0f, false);
+			//Helpers::createCurve(p, e2, s2, true);
 			p.closeSubPath();
+#endif
 		}
 		else
 		{
+
+
+			auto mx = (e.getX() - s.getX()) * 0.5f;
+			auto my = (e.getY() - s.getY());
+			
+
+			auto ms = sh * 0.5f;
+
+			if(e.getY() < s.getY())
+				ms *= -1.0f;
+
 			p.startNewSubPath(s);
-			Helpers::createCurve(p, s, e, isVertical);
+
+			auto pos = s.translated(mx + ms + offset, 0.0f);
+			p.lineTo(pos);
+			pos = pos.translated(0.0, my);
+			p.lineTo(pos);
+			pos = e;
+			p.lineTo(pos);
+			pos = pos.translated(0.0f, sh);
+			p.lineTo(pos);
+			pos = pos.translated(-mx - ms + offset, 0.0f);
+			p.lineTo(pos);
+			pos = pos.translated(0.0f, -my);
+			p.lineTo(pos);
+			pos = s.translated(0.0f, sh);
+			p.lineTo(pos);
+			p.closeSubPath();
+
+			
+
+
+
+
+			/*
+			p.startNewSubPath(s);
+			//Helpers::createCurve(p, s, e, isVertical);
+			Helpers::createCustomizableCurve(p, s, e, 0.0f, 2.0f, false);
 
 			auto me = e.translated(0.0f, (float)Helpers::SignalHeight);
 			auto se = s.translated(0.0f, (float)Helpers::SignalHeight);
 
 			p.lineTo(me);
-			Helpers::createCurve(p, me, se, isVertical);
+			//Helpers::createCurve(p, me, se, isVertical);
+			Helpers::createCustomizableCurve(p, me, se, 0.0f, 2.0f, false);
 			p.closeSubPath();
+			*/
+
+			p = p.createPathWithRoundedCorners(4.0f);
+			
+			
 		}
 		
 		hitzonePaths.push_back({p, dropIndex});
@@ -163,7 +271,12 @@ void ContainerComponent::onChildAddRemove(const ValueTree& v, bool wasAdded)
 		NodeComponent* nc;
 
 		if (Helpers::isContainerNode(v))
-			nc = new ContainerComponent(lasso, v, um);
+		{
+			if(v[PropertyIds::Locked])
+				nc = new LockedContainerComponent(lasso, v, um);
+			else
+				nc = new ContainerComponent(lasso, v, um);
+		}
 		else if (Helpers::isProcessNode(v))
 			nc = new ProcessNodeComponent(lasso, v, um);
 		else
@@ -207,6 +320,15 @@ void ContainerComponent::onChildAddRemove(const ValueTree& v, bool wasAdded)
 				break;
 			}
 		}
+
+		for(auto c: comments)
+		{
+			if(c->data == v)
+			{
+				comments.removeObject(c);
+				break;
+			}
+		}
 	}
 
 	if (auto d = findParentComponentOfClass<CableComponent::CableHolder>())
@@ -219,7 +341,12 @@ void ContainerComponent::paint(Graphics& g)
 {
 	auto nodeColour = Helpers::getNodeColour(data);
 
-	if (data[PropertyIds::Folded] || !header.downPos.isOrigin())
+	g.setColour(Colour(0x20000000));
+	g.fillRect(getLocalBounds().removeFromLeft(Helpers::ParameterWidth));
+
+	g.drawVerticalLine(Helpers::ParameterWidth-1, 0.0f, (float)getHeight());
+
+	if (Helpers::isFoldedOrLockedContainer(getValueTree()) || !header.downPos.isOrigin())
 	{
 		g.fillAll(Colour(0xFF353535));
 	}
@@ -251,26 +378,27 @@ void ContainerComponent::paint(Graphics& g)
 	tb.removeFromTop(Helpers::HeaderHeight);
 	tb = tb.removeFromTop(Helpers::SignalHeight).removeFromLeft(Helpers::ParameterMargin + Helpers::ParameterWidth - 25).reduced(0, 2);
 
-	
-	
-
-	g.setColour(Colours::black.withAlpha(0.2f));
-	g.fillRoundedRectangle(tb.translated(5.0f, 0.0f).toFloat(), 4.0f);
 	g.setColour(nodeColour);
 	description.draw(g, tb.toFloat());
 
 	auto root = findParentComponentOfClass<DspNetworkComponent>();
 
-	if (cables.dropIndex != -1)
+	if (root->currentlyHoveredContainer != nullptr)
 	{
-		g.fillAll(Colour(SIGNAL_COLOUR).withAlpha(0.05f));
+		if(root->currentlyHoveredContainer == this)
+		{
+			if (cables.dropIndex == -1)
+			{
+				g.fillAll(Colour(SIGNAL_COLOUR).withAlpha(0.05f));
+			}
+		}
+		else
+		{
+			g.fillAll(Colour(0xFF222222));
+		}
 	}
 
-	if(!outsideLabel.isEmpty())
-	{
-		g.setFont(GLOBAL_FONT());
-		g.drawText("External Parameters", outsideLabel.toFloat(), Justification::centred);
-	}
+	drawOutsideLabel(g);
 
 	g.setColour(Helpers::getNodeColour(data));
 	cables.draw(g);
@@ -335,7 +463,7 @@ void ContainerComponent::Resizer::mouseUp(const MouseEvent& e)
 	Helpers::updateBounds(parent->getValueTree(), parent->getBoundsInParent(), parent->um);
 
 	auto root = findParentComponentOfClass<DspNetworkComponent>();
-	Helpers::fixOverlap(root->rootComponent->getValueTree(), &root->um, false);
+	Helpers::fixOverlap(Helpers::getCurrentRoot(parent->getValueTree()), &root->um, false);
 }
 
 struct PopupCodeEditor: public Component,
@@ -429,6 +557,12 @@ void ContainerComponent::AddButton::mouseUp(const MouseEvent& e)
 	if(SelectableComponent::Lasso::checkLassoEvent(e, SelectableComponent::LassoState::Up))
 		return;
 
+	if(e.mouseWasDraggedSinceMouseDown())
+	{
+		parent.cables.updatePins(parent);
+		return;
+	}
+
 	if (active)
 	{
 		BuildHelpers::CreateData cd;
@@ -448,37 +582,6 @@ void ContainerComponent::AddButton::mouseUp(const MouseEvent& e)
 		copy.applyTransform(AffineTransform::translation(delta));
 		
 		root->showCreateNodePopup(globalPos, copy, cd);
-
-#if 0
-
-		ValueTree n(PropertyIds::Node);
-		n.setProperty(PropertyIds::FactoryPath, "math.mul", nullptr);
-		n.setProperty(PropertyIds::ID, "math" + String(index), nullptr);
-		n.setProperty(PropertyIds::NodeColour, Colours::red.withHue(Random::getSystemRandom().nextFloat()).withSaturation(0.5f).withBrightness(0.4f).getARGB(), nullptr);
-
-		//auto pos = e.getEventRelativeTo(&parent).getPosition();
-
-		auto nodes = parent.getValueTree().getChildWithName(PropertyIds::Nodes);
-
-		auto prevPos = Helpers::getPosition(nodes.getChild(index - 1));
-		auto nextPos = Helpers::getPosition(nodes.getChild(index));
-
-		auto y = prevPos.getY() + (nextPos.getY() - prevPos.getY()) / 2;
-
-
-		n.setProperty(UIPropertyIds::x, pos.getX(), nullptr);
-		n.setProperty(UIPropertyIds::y, y, nullptr);
-
-		ValueTree ps(PropertyIds::Parameters);
-		ValueTree p(PropertyIds::Parameter);
-		p.setProperty(PropertyIds::ID, "Value", nullptr);
-		ps.addChild(p, -1, nullptr);
-		n.addChild(ps, -1, nullptr);
-
-		nodes.addChild(n, index, parent.um);
-
-		Helpers::fixOverlap(parent.getValueTree(), parent.um, false);
-#endif
 	}
 }
 

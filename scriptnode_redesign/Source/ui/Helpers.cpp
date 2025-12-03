@@ -169,7 +169,19 @@ bool Helpers::isContainerNode(const ValueTree& v)
 
 bool Helpers::isRootNode(const ValueTree& v)
 {
-	return v.getParent().getType() == PropertyIds::Network;
+	return v.getParent().getType() == PropertyIds::Network || v[UIPropertyIds::CurrentRoot];
+}
+
+ValueTree Helpers::getCurrentRoot(const ValueTree& child)
+{
+	auto r = child;
+
+	if(r.getType() == PropertyIds::Node && isRootNode(r))
+		return r;
+
+	r = r.getParent();
+	jassert(r.isValid());
+	return getCurrentRoot(r);
 }
 
 bool Helpers::shouldBeVertical(const ValueTree& container)
@@ -194,7 +206,7 @@ bool Helpers::shouldBeVertical(const ValueTree& container)
 
 bool Helpers::isFoldedRecursive(const ValueTree& v)
 {
-	if(v.getType() == PropertyIds::Network || !v.isValid())
+	if(isRootNode(v) || !v.isValid())
 		return false;
 
 	if(v.getType() == PropertyIds::Node)
@@ -204,6 +216,11 @@ bool Helpers::isFoldedRecursive(const ValueTree& v)
 	}
 
 	return isFoldedRecursive(valuetree::Helpers::findParentWithType(v, PropertyIds::Node));
+}
+
+bool Helpers::isFoldedOrLockedContainer(const ValueTree& v)
+{
+	return (v[PropertyIds::Folded] || v[PropertyIds::Locked]) && !v[UIPropertyIds::CurrentRoot];
 }
 
 bool Helpers::isProcessingSignal(const ValueTree& v)
@@ -254,9 +271,14 @@ bool Helpers::hasDefinedBounds(const ValueTree& v)
 	return v.hasProperty(UIPropertyIds::width) || v.hasProperty(UIPropertyIds::height);
 }
 
+
+
 void Helpers::updateBounds(ValueTree& v, Rectangle<int> newBounds, UndoManager* um)
 {
 	jassert(v.getType() == PropertyIds::Node);
+
+	
+	auto path = getHeaderTitle(v) == "eq_module";
 
 	auto prevBounds = getBounds(v, false);
 
@@ -267,12 +289,18 @@ void Helpers::updateBounds(ValueTree& v, Rectangle<int> newBounds, UndoManager* 
 		msg << prevBounds.toString() << " -> " << newBounds.toString();
 		DBG(msg);
 
-		v.setProperty(UIPropertyIds::x, newBounds.getX(), um);
-		v.setProperty(UIPropertyIds::y, newBounds.getY(), um);
-
-		auto updateSize = !v[PropertyIds::Folded];
-
-		if (updateSize)
+		if(!isRootNode(v))
+		{
+			v.setProperty(UIPropertyIds::x, newBounds.getX(), um);
+			v.setProperty(UIPropertyIds::y, newBounds.getY(), um);
+		}
+		
+		if(isFoldedOrLockedContainer(v))
+		{
+			v.setProperty(UIPropertyIds::foldedWidth, newBounds.getWidth(), um);
+			v.setProperty(UIPropertyIds::foldedHeight, newBounds.getHeight(), um);
+		}
+		else
 		{
 			v.setProperty(UIPropertyIds::width, newBounds.getWidth(), um);
 			v.setProperty(UIPropertyIds::height, newBounds.getHeight(), um);
@@ -282,7 +310,7 @@ void Helpers::updateBounds(ValueTree& v, Rectangle<int> newBounds, UndoManager* 
 
 bool Helpers::isImmediateChildNode(const ValueTree& childNode, const ValueTree& parent)
 {
-	jassert(childNode.getType() == PropertyIds::Node);
+	jassert(childNode.getType() == PropertyIds::Node || childNode.getType() == PropertyIds::Comment);
 	jassert(parent.getType() == PropertyIds::Node);
 
 	return childNode.getParent().getParent() == parent;
@@ -293,67 +321,16 @@ void Helpers::fixOverlap(ValueTree v, UndoManager* um, bool sortProcessNodesFirs
 	fixOverlapRecursive(v, um, sortProcessNodesFirst);
 }
 
-Array<juce::ValueTree> Helpers::getAutomatedChildParameters(ValueTree container)
-{
-	jassert(isContainerNode(container));
 
-	Array<ValueTree> parameters;
-	Array<std::pair<String, String>> matches;
-
-	auto thisParameters = container.getChildWithName(PropertyIds::Parameters);
-
-	for(auto cn: container.getChildWithName(PropertyIds::Nodes))
-	{
-		auto pTree = cn.getChildWithName(PropertyIds::Parameters);
-
-		for(auto p: pTree)
-		{
-			if(p[PropertyIds::Automated])
-			{
-				matches.add({ cn[PropertyIds::ID].toString(), p[PropertyIds::ID].toString() });
-			}
-		}
-	}
-
-	for(auto m: matches)
-	{
-		valuetree::Helpers::forEachParent(container, [&](const ValueTree& v)
-		{
-			if(v.getType() == PropertyIds::Node)
-			{
-				for(auto p: v.getChildWithName(PropertyIds::Parameters))
-				{
-					for(auto c: p.getChildWithName(PropertyIds::Connections))
-					{
-						std::pair<String, String> m(c[PropertyIds::NodeId].toString(), c[PropertyIds::ParameterId].toString());
-
-						if(matches.contains(m))
-						{
-							parameters.addIfNotAlreadyThere(p);
-							break;
-						}
-					}
-				}
-			}
-
-			return false;
-		});
-	}
-
-	for(int i = 0; i < parameters.size(); i++)
-	{
-		if(parameters[i].getParent() == thisParameters)
-			parameters.remove(i--);
-	}
-	
-	return parameters;
-}
 
 juce::Colour Helpers::getNodeColour(const ValueTree& v)
 {
+	if (v.getType() == PropertyIds::Comment)
+		return getNodeColour(valuetree::Helpers::findParentWithType(v, PropertyIds::Node));
+
 	jassert(v.getType() == PropertyIds::Node);
 
-	if(isRootNode(v))
+	if(v.getParent().getType() == PropertyIds::Network)
 		return Colour(0xFF305555);
 
 	auto t = getFactoryPath(v);
@@ -427,7 +404,7 @@ Point<int> Helpers::getPosition(const ValueTree& v)
 	auto x = (int)v[UIPropertyIds::x];
 	auto y = (int)v[UIPropertyIds::y];
 
-	if (v.getParent().getType() == PropertyIds::Network)
+	if (isRootNode(v))
 		return { 0, 0 };
 
 	return { x, y };
@@ -436,26 +413,32 @@ Point<int> Helpers::getPosition(const ValueTree& v)
 Rectangle<int> Helpers::getBounds(const ValueTree& v, bool includingComment)
 {
 	auto p = getPosition(v);
-	auto w = (int)v[UIPropertyIds::width];
-	auto h = (int)v[UIPropertyIds::height];
+
+	auto folded = isFoldedOrLockedContainer(v);
+
+	auto w = (int)v[folded ? UIPropertyIds::foldedWidth : UIPropertyIds::width];
+	auto h = (int)v[folded ? UIPropertyIds::foldedHeight : UIPropertyIds::height];
 
 	if (w == 0)
-		w = 200;
-	if (h == 0)
-		h = 100;
-
-	if (v[PropertyIds::Folded])
 	{
-		w = GLOBAL_BOLD_FONT().getStringWidth(getHeaderTitle(v)) + 2 * HeaderHeight;
-
-		w = jmax(150, w);
-
-		h = HeaderHeight;
-
-		if (isProcessNode(v) || isContainerNode(v))
-			h += SignalHeight;
+		if(folded)
+			w = jmax(150, GLOBAL_FONT().getStringWidth(getHeaderTitle(v)) + 2 * HeaderHeight);
+		else
+			w = 200;
 	}
+	if (h == 0)
+	{
+		if(folded)
+		{
+			h = HeaderHeight;
 
+			if (isProcessNode(v) || isContainerNode(v))
+				h += SignalHeight;
+		}
+		else
+			h = 100;
+	}
+	
 	includingComment &= v[PropertyIds::Comment].toString().isNotEmpty();
 
 	if(includingComment)
@@ -471,6 +454,24 @@ Rectangle<int> Helpers::getBounds(const ValueTree& v, bool includingComment)
 
 
 
+Rectangle<int> Helpers::getBoundsInRoot(const ValueTree& v, bool includingComment)
+{
+	auto b = getBounds(v, includingComment).withPosition({});
+
+	auto p = v;
+
+	while(!isRootNode(p))
+	{
+		auto pos = getPosition(p);
+
+		b.translate(pos.getX(), pos.getY());
+
+		p = valuetree::Helpers::findParentWithType(p, PropertyIds::Node);
+	}
+
+	return b;
+}
+
 void Helpers::fixOverlapRecursive(ValueTree& node, UndoManager* um, bool sortProcessNodesFirst)
 {
 	jassert(node.getType() == PropertyIds::Node);
@@ -481,6 +482,22 @@ void Helpers::fixOverlapRecursive(ValueTree& node, UndoManager* um, bool sortPro
 	auto minX = 30;
 
 	minX += Helpers::ParameterMargin + ParameterWidth;
+
+	if(isContainerNode(node))
+	{
+		auto pTree = node.getChildWithName(PropertyIds::Parameters);
+
+		auto intendForConnections = valuetree::Helpers::forEach(pTree, [&](const ValueTree& con)
+		{
+			if(con.getType() == PropertyIds::Connection)
+				return (bool)con[UIPropertyIds::HideCable];
+
+			return false;
+		});
+
+		if(intendForConnections)
+			minX += Helpers::ParameterWidth;
+	}
 
 	auto minY = 10 + HeaderHeight;
 
@@ -494,22 +511,27 @@ void Helpers::fixOverlapRecursive(ValueTree& node, UndoManager* um, bool sortPro
 
 	auto vertical = shouldBeVertical(node);
 
-	for(auto c: nodes)
-	{
-		auto nt = getHeaderTitle(c).toStdString();
-		allNodes.push_back(c);
-		allNames.push_back(nt);
+	auto foldedOrLocked = isFoldedOrLockedContainer(node);
 
-		if(isProcessNode(c) || isContainerNode(c))
+	if(!foldedOrLocked)
+	{
+		for (auto c : nodes)
 		{
-			processNodes.push_back(c);
-			processNames.push_back(nt);
-		}
-			
-		else
-		{
-			cableNodes.push_back(c);
-			cableNames.push_back(nt);
+			auto nt = getHeaderTitle(c).toStdString();
+			allNodes.push_back(c);
+			allNames.push_back(nt);
+
+			if (isProcessNode(c) || isContainerNode(c))
+			{
+				processNodes.push_back(c);
+				processNames.push_back(nt);
+			}
+
+			else
+			{
+				cableNodes.push_back(c);
+				cableNames.push_back(nt);
+			}
 		}
 	}
 
@@ -568,8 +590,8 @@ void Helpers::fixOverlapRecursive(ValueTree& node, UndoManager* um, bool sortPro
 
 	auto fullBounds = childBounds.getBounds();
 
-	auto currentWidth = (int)node[UIPropertyIds::width];
-	auto currentHeight = (int)node[UIPropertyIds::height];
+	auto currentWidth = (int)node[foldedOrLocked ? UIPropertyIds::foldedWidth : UIPropertyIds::width];
+	auto currentHeight = (int)node[foldedOrLocked ? UIPropertyIds::foldedHeight : UIPropertyIds::height];
 
 	updateBounds(node, {
 		jmax(bounds.getX(), minX),
@@ -599,14 +621,83 @@ void Helpers::updateChannelRecursive(ValueTree& v, int numChannels, UndoManager*
 
 	auto childNodes = v.getChildWithName(PropertyIds::Nodes);
 
+	if(childNodes.getNumChildren() == 0)
+		return;
+
 	if (isMulti)
 		numChannels /= childNodes.getNumChildren();
-
 
 	for (auto cn : childNodes)
 	{
 		updateChannelRecursive(cn, numChannels, um);
 	}
+}
+
+
+void Helpers::migrateFeedbackConnections(ValueTree& root, bool createConnections, UndoManager* um)
+{
+	valuetree::Helpers::forEach(root, [&](ValueTree& v)
+	{
+		if(v.getType() == PropertyIds::Node && v[PropertyIds::FactoryPath].toString() == "routing.send")
+		{
+			if(!createConnections)
+			{
+				auto cTree = v.getChildWithName(PropertyIds::ReceiveTargets);
+
+				if(!cTree.isValid())
+					return false;
+
+				String s;
+
+				for(auto c: cTree)
+				{
+					auto nid = c[PropertyIds::NodeId].toString();
+					s << nid << ";";
+				}
+
+				setNodeProperty(v, PropertyIds::Connections, s.upToLastOccurrenceOf(";", false, false), um);
+				cTree.getParent().removeChild(cTree, um);
+			}
+			{
+				if(v.getChildWithName(PropertyIds::ReceiveTargets).isValid())
+					return false;
+
+				auto propTree = v.getChildWithName(PropertyIds::Properties);
+				auto cp = propTree.getChildWithProperty(PropertyIds::ID, PropertyIds::Connection.toString());
+
+				ValueTree rTree(PropertyIds::ReceiveTargets);
+
+				if(cp.isValid())
+				{
+					auto cv = cp[PropertyIds::Value].toString();
+					auto targets = StringArray::fromTokens(cv, ";", "");
+					targets.removeDuplicates(false);
+					targets.removeEmptyStrings();
+
+					for (auto t : targets)
+					{
+						ValueTree con(PropertyIds::Connection);
+						con.setProperty(PropertyIds::NodeId, t, nullptr);
+						con.setProperty(PropertyIds::ParameterId, "FeedbackInput", nullptr);
+						rTree.addChild(con, -1, nullptr);
+
+						auto r = ParameterHelpers::getConnection(con);
+
+						if(r.isValid())
+							r.setProperty(PropertyIds::Automated, true, um);
+					}
+
+					propTree.removeChild(cp, um);
+				}
+
+				v.addChild(rTree, -1, um);
+
+
+			}
+		}
+
+		return false;
+	});
 }
 
 void Helpers::resetLayout(ValueTree& nt, UndoManager* um)
@@ -625,7 +716,7 @@ void Helpers::resetLayoutRecursive(ValueTree& root, ValueTree& child, UndoManage
 		child.removeProperty(UIPropertyIds::y, um);
 	}
 
-	if (isContainerNode(child) && (bool)child[UIPropertyIds::Locked])
+	if (isContainerNode(child) && ((bool)child[UIPropertyIds::LockPosition] || (bool)child[PropertyIds::Locked]))
 		return;
 
 	if (isContainerNode(child) && !(bool)child[PropertyIds::Folded])
@@ -663,8 +754,166 @@ Point<int> CommentHelpers::getCommentOffset(ValueTree data)
 	return { (int)data[UIPropertyIds::CommentOffsetX], (int)data[UIPropertyIds::CommentOffsetY] };
 }
 
+bool ParameterHelpers::isRoutingReceiveNode(const ValueTree& v)
+{
+	return v.getType() == PropertyIds::Node && v[PropertyIds::FactoryPath].toString() == "routing.receive";
+}
+
+bool ParameterHelpers::isRoutingSendNode(const ValueTree& v)
+{
+	return v.getType() == PropertyIds::Node && v[PropertyIds::FactoryPath].toString() == "routing.send";
+}
+
+bool ParameterHelpers::isSoftBypassNode(const ValueTree& v)
+{
+	return v.getType() == PropertyIds::Node && v[PropertyIds::FactoryPath].toString() == "container.soft_bypass";
+}
+
+bool ParameterHelpers::isNodeConnection(const ValueTree& con)
+{
+	jassert(con.getType() == PropertyIds::Connection);
+
+	auto pid = con[PropertyIds::ParameterId].toString();
+
+	return pid == "Bypassed" || pid == "FeedbackInput";
+}
+
+juce::Colour ParameterHelpers::getParameterColour(const ValueTree& p)
+{
+	if (p.getType() == PropertyIds::Node)
+		return Helpers::getNodeColour(p);
+
+	if (p.getType() == PropertyIds::ModulationTargets || p.getType() == PropertyIds::SwitchTargets)
+		return Helpers::getNodeColour(valuetree::Helpers::findParentWithType(p, PropertyIds::Node));
+
+	auto c = (int64)p[PropertyIds::NodeColour];
+
+	if (c != 0)
+		return Colour((uint32)c);
+
+	return Colours::red.withHue(Random::getSystemRandom().nextFloat()).withSaturation(0.6f).withBrightness(0.7f);
+}
+
+Array<juce::ValueTree> ParameterHelpers::getAutomatedChildParameters(ValueTree container)
+{
+	jassert(Helpers::isContainerNode(container));
+
+	Array<ValueTree> parameters;
+	Array<std::pair<String, String>> matches;
+
+	auto thisParameters = container.getChildWithName(PropertyIds::Parameters);
+
+	for (auto cn : container.getChildWithName(PropertyIds::Nodes))
+	{
+		auto pTree = cn.getChildWithName(PropertyIds::Parameters);
+
+		for (auto p : pTree)
+		{
+			if (p[PropertyIds::Automated])
+			{
+				parameters.add(p);
+				//matches.add({ cn[PropertyIds::ID].toString(), p[PropertyIds::ID].toString() });
+			}
+		}
+	}
+
+	for (int i = 0; i < parameters.size(); i++)
+	{
+		auto con = getConnection(parameters[i]);
+
+		if(con.isAChildOf(container))
+			parameters.remove(i--);
+	}
+
+	return parameters;
+}
+
+juce::String ParameterHelpers::getParameterPath(const ValueTree& v)
+{
+	String s;
+
+	if(isRoutingReceiveNode(v))
+	{
+		return v[PropertyIds::ID].toString() + "." + "FeedbackInput";
+	}
+	if(isSoftBypassNode(v))
+	{
+		return v[PropertyIds::ID].toString() + "." + "Bypassed";
+	}
+	if (v.getType() == PropertyIds::Connection)
+	{
+		return v[PropertyIds::NodeId].toString() + "." + v[PropertyIds::ParameterId].toString();
+	}
+	else if (v.getType() == PropertyIds::Parameter)
+	{
+		return v.getParent().getParent()[PropertyIds::ID].toString() + "." + v[PropertyIds::ID].toString();
+	}
+	else
+	{
+		jassertfalse;
+		return {};
+	}
+}
+
+juce::ValueTree ParameterHelpers::getConnection(const ValueTree& p)
+{
+	jassert(p.getType() == PropertyIds::Parameter ||
+			p.getType() == PropertyIds::Connection || 
+			p.getType() == PropertyIds::Node);
+
+	auto path = getParameterPath(p);
+
+	Identifier typeToLookFor;
+
+	if(p.getType() == PropertyIds::Connection)
+	{
+		if(isNodeConnection(p))
+			typeToLookFor = PropertyIds::Node;
+		else
+			typeToLookFor = PropertyIds::Parameter;
+	}
+	else
+		typeToLookFor = PropertyIds::Connection;
+
+	auto root = valuetree::Helpers::findParentWithType(p, PropertyIds::Network);
+
+	ValueTree match;
+
+	valuetree::Helpers::forEach(root, [&](const ValueTree& c)
+	{
+		if(c.getType() == typeToLookFor)
+		{
+			auto cPath = getParameterPath(c);
+
+			if(cPath == path)
+			{
+				match = c;
+				return true;
+			}
+		}
+
+		return false;
+	});
+
+	if(p.getType() == PropertyIds::Parameter)
+	{
+		// if this hits, the Automated flag is not set correctly...
+		jassert((bool)p[PropertyIds::Automated] == match.isValid());
+	}
+
+	return match;
+}
+
+juce::ValueTree ParameterHelpers::getTarget(const ValueTree& con)
+{
+	return getConnection(con);
+}
+
 void LayoutTools::alignVertically(const Array<ValueTree>& list, UndoManager* um)
 {
+	if (list.isEmpty())
+		return;
+
 	RectangleList<int> bounds;
 
 	for(auto& l: list)
@@ -680,6 +929,9 @@ void LayoutTools::alignVertically(const Array<ValueTree>& list, UndoManager* um)
 
 void LayoutTools::alignHorizontally(const Array<ValueTree>& list, UndoManager* um)
 {
+	if (list.isEmpty())
+		return;
+
 	RectangleList<int> bounds;
 
 	for (auto& l : list)
@@ -697,13 +949,17 @@ void LayoutTools::alignHorizontally(const Array<ValueTree>& list, UndoManager* u
 
 void LayoutTools::distributeVertically(const Array<ValueTree>& list, UndoManager* um)
 {
-	
+	if (list.isEmpty())
+		return;
 
 	distributeInternal(list, um, false);
 }
 
 void LayoutTools::distributeHorizontally(const Array<ValueTree>& list, UndoManager* um)
 {
+	if (list.isEmpty())
+		return;
+
 	distributeInternal(list, um, true);
 }
 
@@ -755,6 +1011,63 @@ void LayoutTools::distributeInternal(const Array<ValueTree>& list, UndoManager* 
 		l.setProperty(horizontal ? UIPropertyIds::x : UIPropertyIds::y, p, um);
 		p += (int)l[horizontal ? UIPropertyIds::width : UIPropertyIds::height];
 		p += gapSize;
+	}
+}
+
+void LayoutTools::alignCables(const Array<CableData>& list, UndoManager* um)
+{
+	if (list.isEmpty())
+		return;
+
+	std::map<String, int> moves;
+
+	for(const auto& d: list)
+	{
+		jassert(d.con.getType() == PropertyIds::Connection);
+		ValueTree sourceNode = Helpers::findParentNode(d.con);
+		ValueTree targetNode = Helpers::findParentNode(ParameterHelpers::getTarget(d.con));
+
+		// only align siblings for now
+		if(sourceNode.getParent() != targetNode.getParent())
+			continue;
+
+		auto sourceId = sourceNode[PropertyIds::ID].toString();
+		auto targetId = targetNode[PropertyIds::ID].toString();
+
+		auto deltaY = -1 * (int)(d.e.getY() - d.s.getY());
+		auto deltaX = 0;
+
+		if(moves.find(sourceId) != moves.end())
+			deltaY += moves.at(sourceId);
+
+		moves[targetId] = deltaY;
+
+		Helpers::translatePosition(targetNode, { deltaX, deltaY }, um);
+	}
+
+}
+
+void LayoutTools::distributeCableOffsets(const Array<ValueTree>& list, UndoManager* um)
+{
+	if (list.size() <= 2)
+		return;
+
+	double minOffset = 1000.0;
+	double maxOffset = -1000.0;
+
+	for(auto& v: list)
+	{
+		minOffset = jmin(minOffset, (double)v.getProperty(UIPropertyIds::CableOffset, 0.0));
+		maxOffset = jmax(maxOffset, (double)v.getProperty(UIPropertyIds::CableOffset, 0.0));
+	}
+
+	if(minOffset != maxOffset)
+	{
+		auto width = maxOffset - minOffset;
+		auto delta = width / (list.size() - 1);
+
+		for(int i = 0; i < list.size(); i++)
+			list[i].setProperty(UIPropertyIds::CableOffset, minOffset + delta * (float)i, um);
 	}
 }
 

@@ -38,7 +38,7 @@ using namespace juce;
 
 DraggedCable::~DraggedCable()
 {
-	if (hoveredPin == nullptr)
+	if (hoveredPin == nullptr && ok)
 	{
 		BuildHelpers::CreateData cd;
 		
@@ -62,6 +62,7 @@ DraggedCable::~DraggedCable()
 
 void DraggedCable::setTargetPosition(Point<int> rootPosition)
 {
+	ok = true;
 	auto parent = getParentComponent();
 
 	auto start = parent->getLocalArea(src, src->getLocalBounds()).toFloat();
@@ -98,17 +99,35 @@ void DraggedCable::setTargetPosition(Point<int> rootPosition)
 	{
 		if(currentPin->matchesConnectionType(src->getConnectionType()))
 		{
-			colour1 = Colour(SIGNAL_COLOUR);
-			hoveredPin = currentPin;
-			over = true;
+			auto result = currentPin->getTargetErrorMessage(src->data);
+
+			if (!result.wasOk())
+			{
+				label = result.getErrorMessage();
+				colour1 = Colour(HISE_ERROR_COLOUR);
+				ok = false;
+			}
+			else
+			{
+				colour1 = Colour(SIGNAL_COLOUR);
+				hoveredPin = currentPin;
+				label = "Connect to " + hoveredPin->getTargetParameterId();
+				over = true;
+			}
 		}
-			
 		else
+		{
+			label = "Invalid connection type";
 			colour1 = Colour(HISE_ERROR_COLOUR);
+		}
 		
 		colour2 = colour1;
 
 		ne = Point<int>(pinArea.getX(), pinArea.getCentreY());
+	}
+	else
+	{
+		label = "Create new parameter node";
 	}
 
 	rebuildPath(ns, ne.toFloat(), parent);
@@ -119,19 +138,39 @@ void CableComponent::CableHolder::rebuildCables()
 	if (!initialised)
 		return;
 
-	
-
 	auto ok = false;
 
 	OwnedArray<CableComponent> newCables;
 
 	std::map<CablePinBase*, CablePinBase::Connections> allConnections;
 
+	Array<CablePinBase::WeakPtr> lockedRootSources;
+
 	auto asComponent = dynamic_cast<Component*>(this);
 
-	Component::callRecursive<ContainerComponent>(asComponent, [&](ContainerComponent* cc)
+	Component::callRecursive<ContainerComponentBase>(asComponent, [&](ContainerComponentBase* cc)
 	{
+		auto cTree = cc->asNodeComponent().getValueTree();
+		auto isRoot = Helpers::isRootNode(cTree);
+
 		cc->rebuildOutsideParameters();
+
+		auto isLockedRoot = isRoot && cTree.getParent().getType() != PropertyIds::Network;
+
+		if (isLockedRoot)
+		{
+			for(int i = 0; i < cc->getNumOutsideParameters(); i++)
+			{
+				auto p = cc->getOutsideParameter(i);
+				auto con = p->rebuildConnections(asComponent);
+
+				if (!con.empty())
+					allConnections[p] = std::move(con);
+
+				lockedRootSources.addIfNotAlreadyThere(p);
+			}
+		}
+
 		return false;
 	});
 
@@ -172,31 +211,57 @@ void CableComponent::CableHolder::rebuildCables()
 		return false;
 	});
 
+	
+
 	std::map<CablePinBase*, CablePinBase::Connections> localConnections;
+
+	stubs.clear();
 
 	for(auto& c: allConnections)
 	{
-		if(c.first->data.getType() != PropertyIds::Parameter)
-			continue;
-
 		for (auto it = c.second.begin(); it != c.second.end();)
 		{
+			CablePinBase* src = c.first;
 			CablePinBase* dst = *it;
 
-			auto targetContainer = dst->findParentComponentOfClass<ContainerComponent>();
+			auto con = ParameterHelpers::getConnection(dst->data);
+			
+			// Check whether to add a cable
+			auto shouldHide = con.isValid() && con[UIPropertyIds::HideCable];
 
-			if(targetContainer != nullptr)
+			// Don't add cable for targets that are not visible
+			auto isShowing = dst->isShowing();
+
+			// Force a cable for sources that are the root of a locked container
+			auto forceCable = lockedRootSources.contains(src);
+
+			if(!forceCable && (shouldHide || !isShowing))
 			{
-				if (auto localSource = targetContainer->getOutsideParameter(c.first->data))
+				auto targetContainer = dst->findParentComponentOfClass<ContainerComponent>();
+
+				if (targetContainer != nullptr)
 				{
-					localConnections[localSource].push_back(dst);
-					it = c.second.erase(it);
+					if (auto localSource = targetContainer->getOutsideParameter(c.first->data))
+					{
+						localConnections[localSource].push_back(dst);
+
+						stubs.add(new Stub(*this, src, dst, Stub::Attachment::Source));
+
+						it = c.second.erase(it);
+						continue;
+					}
 				}
-				else
-					++it;
+
+				stubs.add(new Stub(*this, src, dst, Stub::Attachment::Source));
+
+				if(isShowing)
+					stubs.add(new Stub(*this, src, dst, Stub::Attachment::Target));
+
+				it = c.second.erase(it);
+				continue;
 			}
-			else
-				++it;
+				
+			++it;
 		}
 	}
 
@@ -222,17 +287,23 @@ void CableComponent::CableHolder::rebuildCables()
 			auto nc = new CableComponent(*asLasso, src, dst);
 
 			cables.add(nc);
-			asComponent->addChildComponent(nc);
+			asComponent->addAndMakeVisible(nc);
 
-			auto sourceVisible = !Helpers::isFoldedRecursive(src->getNodeTree());
-			auto targetVisible = !Helpers::isFoldedRecursive(dst->getNodeTree());
+			//auto sourceVisible = !Helpers::isFoldedRecursive(src->getNodeTree());
+			//auto targetVisible = !Helpers::isFoldedRecursive(dst->getNodeTree());
 
-			nc->setVisible(sourceVisible && targetVisible);
+			//nc->setVisible(sourceVisible && targetVisible);
 
 			nc->updatePosition({}, {});
 			
-			nc->colour1 = Helpers::getParameterColour(src->data);
-			nc->colour2 = Helpers::getNodeColour(dst->data.getParent().getParent());
+			nc->colour1 = ParameterHelpers::getParameterColour(src->data);
+
+			auto n = dst->data;
+
+			if(n.getType() != PropertyIds::Node)
+				n = Helpers::findParentNode(n);
+
+			nc->colour2 = Helpers::getNodeColour(n);
 
 			nc->toBack();
 		}
@@ -247,11 +318,13 @@ void CableComponent::CableHolder::rebuildCables()
 
 void DspNetworkComponent::setIsDragged(NodeComponent* nc)
 {
-	auto currentParent = dynamic_cast<ContainerComponent*>(nc->getParentComponent());
+	DraggedNode dn;
+	dn.originalParent = dynamic_cast<ContainerComponent*>(nc->getParentComponent());
+	dn.node = nc;
 
-	if(currentParent == nullptr)
-		return;
+	dn.removeFromParent(*this);
 
+#if 0
 	auto currentBounds = nc->getBoundsInParent();
 
 	currentlyDraggedComponents.add(nc);
@@ -264,11 +337,20 @@ void DspNetworkComponent::setIsDragged(NodeComponent* nc)
 
 	auto rootBounds = getLocalArea(currentParent, currentBounds);
 	nc->setBounds(rootBounds);
+#endif
 }
 
 void DspNetworkComponent::clearDraggedComponents()
 {
+	for(auto& c: currentlyDraggedComponents)
+		c.addToParent(*this);
+
 	currentlyDraggedComponents.clear();
+
+	if(currentlyHoveredContainer != nullptr)
+		currentlyHoveredContainer->repaint();
+
+	currentlyHoveredContainer = nullptr;
 }
 
 void DspNetworkComponent::resetDraggedBounds()
@@ -277,10 +359,28 @@ void DspNetworkComponent::resetDraggedBounds()
 	{
 		for (auto nc : currentlyDraggedComponents)
 		{
-			auto containerBounds = currentlyHoveredContainer->getLocalArea(this, nc->getBoundsInParent());
-			Helpers::updateBounds(nc->getValueTree(), containerBounds, &um);
+			auto containerBounds = currentlyHoveredContainer->getLocalArea(this, nc.node->getBoundsInParent());
+			Helpers::updateBounds(nc.node->getValueTree(), containerBounds, &um);
 		}
 	}
+}
+
+void DspNetworkComponent::showCreateConnectionPopup(Point<int> pos)
+{
+	currentCreateNodePopup = nullptr;
+
+	if(currentCreateConnectionPopup == nullptr)
+	{
+		addAndMakeVisible(currentCreateConnectionPopup = new CreateConnectionPopup(*this));
+		currentCreateConnectionPopup->setCentrePosition(pos);
+	}
+	else
+	{
+		currentCreateConnectionPopup = nullptr;
+	}
+
+	
+
 }
 
 void DspNetworkComponent::CreateNodePopup::textEditorReturnKeyPressed(TextEditor& te)

@@ -39,12 +39,20 @@ using namespace juce;
 
 struct ProcessNodeComponent : public NodeComponent
 {
+	static constexpr int PinSize = 8;
+
 	struct RoutableSignalComponent : public CablePinBase
 	{
 		RoutableSignalComponent(ProcessNodeComponent& parent_) :
 			CablePinBase(parent_.getValueTree(), parent_.um),
 			parent(parent_)
-		{};
+		{
+			if(!canBeTarget())
+				setEnableDragging(true);
+
+			setSize(Helpers::ParameterWidth, Helpers::SignalHeight);
+		}
+		;
 
 		Helpers::ConnectionType getConnectionType() const override
 		{
@@ -58,53 +66,99 @@ struct ProcessNodeComponent : public NodeComponent
 
 		bool canBeTarget() const override { return Helpers::getFactoryPath(parent.getValueTree()).second == "receive"; }
 
-		ValueTree getConnectionTree() const override {
-			return parent.getValueTree().getChildWithName(PropertyIds::Properties);
-		}
-
-		bool matchConnection(const ValueTree& possibleConnection) const override
+		ValueTree getConnectionTree() const override 
 		{
-			if (possibleConnection[PropertyIds::ID].toString() == PropertyIds::Connection.toString())
-			{
-				auto connectedTargets = StringArray::fromTokens(possibleConnection[PropertyIds::Value].toString(), ";", "");
-				connectedTargets.trim();
-				connectedTargets.removeEmptyStrings();
-
-				auto n1 = getNodeTree()[PropertyIds::ID].toString();
-				return connectedTargets.contains(n1);
-			}
-
-			return false;
+			return parent.getValueTree().getChildWithName(PropertyIds::ReceiveTargets);
 		}
 
 		void paint(Graphics& g) override
 		{
+			g.setColour(Colours::grey);
+
+			for (auto& s: screws)
+				g.fillPath(s);
+
+			if(!canBeTarget())
+			{
+				g.setColour(Colours::white.withAlpha(isMouseOver() ? 0.7f : 0.5f));
+				g.fillPath(targetIcon);
+			}
+				
+			g.setColour(Colours::white.withAlpha(0.3f));
+
+			auto j = canBeTarget() ? Justification::right : Justification::left;
+
+			g.setFont(GLOBAL_FONT());
+			g.drawText(getSourceDescription().fromFirstOccurrenceOf(".", false, false), getLocalBounds().reduced(10, 0).toFloat(), j);
+		}
+
+		String getSourceDescription() const override
+		{
+			String s;
+
+			s << Helpers::getHeaderTitle(getNodeTree()) << ".";
+
+			s << (canBeTarget() ? "Feedback Input" : "Feedback Output");
+
+			return s;
+		}
+
+		void resized() override
+		{
+			if(!canBeTarget())
+			{
+				auto b = getLocalBounds().toFloat();
+				auto pb = b.removeFromRight(getHeight());
+				parent.scalePath(targetIcon, pb.reduced(12.0f));
+			}
+
+			screws.clear();
+
+
 			auto b = getLocalBounds().toFloat();
+
+			auto paddingX = JUCE_LIVE_CONSTANT_OFF(8);
+			auto paddingY = JUCE_LIVE_CONSTANT_OFF(6);
 
 			if (canBeTarget())
 			{
 				// receive
-				b = b.removeFromLeft(30.0f);
+				b.removeFromLeft(paddingX);
+				b = b.removeFromLeft(PinSize);
 			}
 			else
 			{
+				paddingX += JUCE_LIVE_CONSTANT_OFF(25);
+
 				// send
-				b = b.removeFromRight(30.0f);
+				b.removeFromRight(paddingX);
+				b = b.removeFromRight(PinSize);
 			}
 
-			g.setColour(Colours::white);
-			g.fillRect(b);
+			b = b.reduced(0, paddingY);
+
+			auto delta = b.getHeight() / (parent.numChannels);
+
+			for (int i = 0; i < parent.numChannels; i++)
+			{
+				auto s = Helpers::createPinHole();
+
+				parent.scalePath(s, b.removeFromTop(delta).withSizeKeepingCentre(PinSize, PinSize));
+				screws.push_back(s);
+			}
 		}
 
 		String getTargetParameterId() const override {
-			return "Connection";
+			return "FeedbackInput";
 		}
+
+		std::vector<Path> screws;
 
 		ProcessNodeComponent& parent;
 		
 	};
 
-	ProcessNodeComponent(Lasso& l, const ValueTree& v, UndoManager* um_) :
+	ProcessNodeComponent(Lasso* l, const ValueTree& v, UndoManager* um_) :
 		NodeComponent(l, v, um_, true)
 	{
 		if (Helpers::hasRoutableSignal(v))
@@ -114,7 +168,11 @@ struct ProcessNodeComponent : public NodeComponent
 
 		dummyBody = DummyBody::createDummyComponent(v[PropertyIds::FactoryPath].toString());
 
-		if (dummyBody != nullptr)
+		if(routableSignal != nullptr)
+		{
+			setFixSize({});
+		}
+		else if (dummyBody != nullptr)
 		{
 			addAndMakeVisible(dummyBody);
 			setFixSize(dummyBody->getLocalBounds());
@@ -125,7 +183,7 @@ struct ProcessNodeComponent : public NodeComponent
 
 	void paint(Graphics& g) override
 	{
-		g.fillAll(Colour(0xFF353535));
+		g.fillAll(getValueTree()[PropertyIds::Folded] ? Colour(0xFF292929) : Colour(0xFF353535));
 		g.setColour(Helpers::getNodeColour(getValueTree()));
 		g.drawRect(getLocalBounds().toFloat(), 1.0f);
 
@@ -145,7 +203,40 @@ struct ProcessNodeComponent : public NodeComponent
 
 		auto cl = Helpers::getNodeColour(getValueTree());
 
-		
+		if(routableSignal != nullptr)
+		{
+			jassert(routableSignal->screws.size() == numChannels);
+
+			for(int i = 0; i < numChannels; i++)
+			{
+				Point<float> p1 = getLocalPoint(routableSignal, routableSignal->screws[i].getBounds().getCentre());
+				Point<float> p2;
+
+				float offset = 0.0f;
+
+				if(routableSignal->canBeTarget())
+				{
+					p2 = cables[i].second.getBounds().getCentre();
+					offset = -40.0f;
+				}
+				else
+				{
+					p2 = cables[i].first.getBounds().getCentre();
+					std::swap(p2, p1);
+					offset = 35.0f;
+				}
+					
+				offset += 6.0f * ((float)i / (float)numChannels);
+
+				Path p;
+				Helpers::createCustomizableCurve(p, p1, p2, offset, 3.0f, true);
+
+				g.setColour(Colours::black.withAlpha(0.7f));
+				g.strokePath(p, PathStrokeType(3.0f));
+				g.setColour(cl);
+				g.strokePath(p, PathStrokeType(1.0f));
+			}
+		}
 
 		for(auto& c: cables)
 		{
@@ -158,49 +249,54 @@ struct ProcessNodeComponent : public NodeComponent
 			g.setColour(cl);
 			g.drawLine({ c.first.getBounds().getCentre(), c.second.getBounds().getCentre() }, 1.0f);
 		}
-
-		
 	}
+
+	void onFold(const Identifier& id, const var& newValue) override
+	{
+		if (dummyBody != nullptr)
+			dummyBody->setVisible(!(bool)newValue);
+
+		NodeComponent::onFold(id, newValue);
+	}
+
 
 	void resized() override
 	{
 		NodeComponent::resized();
 
+		auto b = getLocalBounds();
+		b.removeFromTop(Helpers::HeaderHeight);
+		b.removeFromTop(Helpers::SignalHeight);
+
+		auto deltaY = 0.0;
+
 		if (routableSignal != nullptr)
 		{
-			auto b = getLocalBounds();
-			b.removeFromTop(Helpers::HeaderHeight + Helpers::SignalHeight);
 			routableSignal->setBounds(b.removeFromTop(Helpers::SignalHeight));
+			deltaY += Helpers::SignalHeight;
 		}
 
-		if (dummyBody != nullptr)
+		if (dummyBody != nullptr && dummyBody->isVisible())
 		{
-			auto b = getLocalBounds();
-
-			b.removeFromTop(Helpers::HeaderHeight);
-
-			if (hasSignal)
-				b.removeFromTop(Helpers::SignalHeight);
-
 			dummyBody->setTopLeftPosition(b.getTopLeft());
 
 			b.removeFromTop(dummyBody->getHeight());
+			deltaY += dummyBody->getHeight();
+		}
 
-			for(auto p: parameters)
-			{
-				p->setTopLeftPosition(p->getPosition().translated(0, dummyBody->getHeight()));
-			}
+		for (auto p : parameters)
+		{
+			p->setTopLeftPosition(p->getPosition().translated(0, deltaY));
+		}
 
-			for (auto m: modOutputs)
-			{
-				m->setTopLeftPosition(m->getPosition().translated(0, dummyBody->getHeight()));
-			}
-
+		for (auto m : modOutputs)
+		{
+			m->setTopLeftPosition(m->getPosition().translated(0, deltaY));
 		}
 
 		cables.clear();
 
-		auto b = getLocalBounds();
+		b = getLocalBounds();
 		b.removeFromTop(Helpers::HeaderHeight);
 		auto sb = b.removeFromTop(Helpers::SignalHeight);
 
@@ -216,8 +312,8 @@ struct ProcessNodeComponent : public NodeComponent
 			auto p1 = Helpers::createPinHole();
 			auto p2 = Helpers::createPinHole();
 
-			PathFactory::scalePath(p1, row.removeFromLeft(12).toFloat().reduced(1.0f));
-			PathFactory::scalePath(p2, row.removeFromRight(12).toFloat().reduced(1.0f));
+			PathFactory::scalePath(p1, row.removeFromLeft(12).toFloat().withSizeKeepingCentre(PinSize, PinSize));
+			PathFactory::scalePath(p2, row.removeFromRight(12).toFloat().withSizeKeepingCentre(PinSize, PinSize));
 
 			cables.push_back( { p1, p2 });
 		}
@@ -230,9 +326,58 @@ struct ProcessNodeComponent : public NodeComponent
 	int numChannels = 2;
 };
 
+struct LockedContainerComponent: public ProcessNodeComponent,
+								 public ContainerComponentBase
+{
+	LockedContainerComponent(Lasso* l, const ValueTree& v, UndoManager* um_);;
+
+	void paint(Graphics& g) override
+	{
+		ProcessNodeComponent::paint(g);
+		drawOutsideLabel(g);
+	}
+
+	CablePinBase* createOutsideParameterComponent(const ValueTree& source) override
+	{
+		auto target = ParameterHelpers::getTarget(source);
+		return new LockedTarget(target, asNodeComponent().getUndoManager());
+	}
+
+	void onOutsideParameterChange(int before, int now) override
+	{
+		// make sure to set the component position before this call to ensure
+		// that it ends up at the right place...
+		setTopLeftPosition(Helpers::getPosition(getValueTree()));
+
+		asNodeComponent().setFixSize(Rectangle<int>(0, 0, Helpers::SignalHeight + Helpers::ParameterWidth, now * Helpers::ModulationOutputHeight + 20 + Helpers::ParameterMargin * 2));
+
+		ContainerComponentBase::onOutsideParameterChange(before, now);
+	}
+
+	Component* createPopupComponent() override;
+
+	void resized() override
+	{
+		ProcessNodeComponent::resized();
+
+		auto hb = header.getLocalBounds();
+		hb.removeFromRight(hb.getHeight());
+		gotoButton.setBounds(hb.removeFromRight(hb.getHeight()).reduced(3));
+
+		auto yOffset = Helpers::HeaderHeight + Helpers::SignalHeight + Helpers::ParameterMargin;
+
+		if (auto lp = parameters.getLast())
+			yOffset = lp->getBottom();
+
+		positionOutsideParameters(yOffset);
+	}
+
+	HiseShapeButton gotoButton;
+};
+
 struct NoProcessNodeComponent : public NodeComponent
 {
-	NoProcessNodeComponent(Lasso& l, const ValueTree& v, UndoManager* um_) :
+	NoProcessNodeComponent(Lasso* l, const ValueTree& v, UndoManager* um_) :
 		NodeComponent(l, v, um_, false)
 	{
 		setOpaque(true);
@@ -269,11 +414,19 @@ struct NoProcessNodeComponent : public NodeComponent
 		}
 	}
 
+	void onFold(const Identifier& id, const var& newValue) override
+	{
+		if (dummyBody != nullptr)
+			dummyBody->setVisible(!(bool)newValue);
+
+		NodeComponent::onFold(id, newValue);
+	}
+
 	void resized() override
 	{
 		NodeComponent::resized();
 
-		if (dummyBody != nullptr)
+		if (dummyBody != nullptr && dummyBody->isVisible())
 		{
 			auto b = getLocalBounds();
 
@@ -282,13 +435,20 @@ struct NoProcessNodeComponent : public NodeComponent
 			if (hasSignal)
 				b.removeFromTop(Helpers::SignalHeight);
 
-			if (!parameters.isEmpty())
-				b.removeFromLeft(Helpers::ParameterMargin + Helpers::ParameterWidth);
+			dummyBody->setTopLeftPosition(b.getTopLeft());
 
-			if (!modOutputs.isEmpty())
-				b.removeFromRight(Helpers::ParameterWidth);
+			b.removeFromTop(dummyBody->getHeight());
 
-			dummyBody->setTopLeftPosition(b.getPosition());
+			for (auto p : parameters)
+			{
+				p->setTopLeftPosition(p->getPosition().translated(0, dummyBody->getHeight()));
+			}
+
+			for (auto m : modOutputs)
+			{
+				m->setTopLeftPosition(m->getPosition().translated(0, dummyBody->getHeight()));
+			}
+
 		}
 	}
 

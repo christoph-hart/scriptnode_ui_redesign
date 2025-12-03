@@ -10,7 +10,7 @@ using namespace juce;
 
 
 
-/** TODO:
+/** Done:
 
 - add comments OK
 - add floating parameters (break out & move around)
@@ -20,27 +20,55 @@ using namespace juce;
 - add proper delete / reassign OK
 - add create popup OK
 
-
 - refactor: make scriptnode lib objects OK
 - add cable curve functions OK
 - fix cable node detection (use database) OK
 - make database a shared object OK
 - fix IsAutomated when creating a cable node with Value OK
 - make offline container not part of signal path OK
+- fix cable node dragging into other containers OK
+- fix double connections after duplicating nodes OK
+- add free floating comments OK
+- fix dragging containers / big nodes into smaller containers OK
+- cleanup groups when deleting nodes OK
+- remove comment when deleting node OK
+- move modulation output 10px down for straight connection line OK
 
-- add collapse function & breadcrumb stuff 
-- fix cable node dragging into other containers
-- remove screenshots from database
+- fix hitzones with new signal paths OK
+- fix vertical signal paths (offset S shape for multiple channels) OK
+- make signal paths draggable with offset (add CableOffset to Node) OK
 
-- fix double connections after duplicating nodes
+- add collapse function & breadcrumb stuff OK
+
+- fix send / receive node stuff OK
+
+- fix connections in locked container OK
+- add show node body on right click when folded OK
+- add show map on right click OK
+
+TODO:
+
+- make snap markers & auto align to cables & other nodes
+
+- add grid for rasterized movements
 - fix selection with folded containers
 - fix alignment & distribution with folded containers
-- add free floating comments
-- fix dragging containers / big nodes into smaller containers
-- cleanup groups when deleting nodes
-- fix send / receive node stuff
-- move modulation output 10px down for straight connection line
-- 
+
+- add icons for autocomplete popup: polyphony, midi, complex data, unscaled, mod output
+- remove screenshots from database
+
+- add parameter management tools (add / remove, rename / range / grouping)
+
+- implement LOD system for better rendering with big patches
+
+
+
+
+
+- add parameter popup with sliders ("P")
+- add context menu with actions
+
+- add dynamic process signal flag with path stuff for extra_mods (all nodes that have a ProcessSignal parameter)
 
 
 */
@@ -58,7 +86,7 @@ using namespace juce;
 class MainComponent  : public juce::Component,
                        public PathFactory,
                        public valuetree::AnyListener,
-	                   public TextEditorWithAutocompleteComponent::Parent
+                       public scriptnode::DspNetworkComponent::Parent
 {
     static constexpr int MenuHeight = 24;
 
@@ -77,34 +105,9 @@ public:
         codeDoc.replaceAllContent(newContent);
     }
 
-	StringArray getAutocompleteItems(const Identifier& id) override
-	{
-        auto createSignalNodes = viewport.getContent<scriptnode::DspNetworkComponent>()->createSignalNodes;
-
-        auto list = db.getNodeIds(createSignalNodes);
-
-        if(id.isValid())
-        {
-            auto prefix = id.toString();
-
-            StringArray matches;
-            matches.ensureStorageAllocated(list.size());
-
-            for(const auto& l: list)
-            {
-                if(l.startsWith(prefix))
-                    matches.add(l.fromFirstOccurrenceOf(prefix, false, false));
-            }
-
-            return matches;
-        }
-
-        return list;
-	}
+	
 
 private:
-
-    scriptnode::NodeDatabase db;
 
     //==============================================================================
     // Your private member variables go here...
@@ -139,7 +142,7 @@ private:
 
 
 
-	
+	scriptnode::NodeDatabase db;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };

@@ -37,6 +37,43 @@ namespace scriptnode {
 using namespace hise;
 using namespace juce;
 
+
+struct RangePresets
+{
+	RangePresets();
+
+	static File getRangePresetFile();
+
+	void createDefaultRange(const String& id, InvertableParameterRange d, double midPoint = -10000000.0);
+
+	int getPresetIndex(const InvertableParameterRange& r)
+	{
+		for (int i = 0; i < presets.size(); i++)
+		{
+			if (presets[i].nr == r)
+				return i;
+		}
+
+		return -1;
+	}
+
+	~RangePresets();
+
+	struct Preset
+	{
+		void restoreFromValueTree(const ValueTree& v);
+
+		ValueTree exportAsValueTree() const;
+
+		InvertableParameterRange nr;
+		String id;
+		int index;
+	};
+
+	File fileToLoad;
+	Array<Preset> presets;
+};
+
 struct CablePinBase : public Component,
 					  public PathFactory
 {
@@ -64,6 +101,10 @@ struct CablePinBase : public Component,
 		return p;
 	}
 
+	bool isDraggable() const { return draggingEnabled; }
+
+	virtual String getSourceDescription() const = 0;
+
     virtual String getTargetParameterId() const = 0;
     virtual ValueTree getConnectionTree() const = 0;
 
@@ -72,7 +113,7 @@ struct CablePinBase : public Component,
         if(data.getType() == PropertyIds::Node)
             return data;
 
-        return valuetree::Helpers::findParentWithType(data, PropertyIds::Node);
+        return Helpers::findParentNode(data);
     }
 
     /** Override this method and check if the value tree for the given connection
@@ -91,34 +132,18 @@ struct CablePinBase : public Component,
         return pMatch && nMatch;
     }
 
-	Connections rebuildConnections(Component* parent)
+	virtual Result getTargetErrorMessage(const ValueTree& requestedSource) const
 	{
-		Connections connections;
+		if(!canBeTarget())
+			return Result::fail("Not a connection target");
 
-        auto thisType = getConnectionType();
+		if(data[PropertyIds::Automated])
+			return Result::fail("Already connected");
 
-		Component::callRecursive<CablePinBase>(parent, [&](CablePinBase* c)
-		{
-            if(c->canBeTarget() && c->matchesConnectionType(thisType))
-            {
-                auto p1 = c->getTargetParameterId();
-				auto n1 = c->getNodeTree()[PropertyIds::ID].toString();
-
-				for (auto d : getConnectionTree())
-				{
-                    if(c->matchConnection(d))
-                    {
-                        connections.push_back(c);
-                        break;
-                    }
-				}
-            }
-				
-			return false;
-		});
-
-		return connections;
+		return Result::ok();
 	}
+
+	Connections rebuildConnections(Component* parent);
 
 	void mouseDown(const MouseEvent& e) override;
 
@@ -130,34 +155,108 @@ struct CablePinBase : public Component,
 
 	void addConnection(const WeakPtr dst);
 
+	void setBlinkAlpha(float newAlpha)
+	{
+		blinkAlpha = jlimit(0.0f, 1.0f, newAlpha);
+		repaint();
+
+	}
+
+	void drawBlinkState(Graphics& g) 
+	{
+		if(blinkAlpha > 0.0f)
+		{
+			g.setColour(Colours::white.withAlpha(jlimit(0.0f, 1.0f, blinkAlpha)));
+			g.drawRoundedRectangle(getLocalBounds().toFloat(), 3.0f, 2.0f);
+
+			g.setColour(Colours::white.withAlpha(jlimit(0.0f, 1.0f, blinkAlpha) * 0.2f));
+			g.fillRoundedRectangle(getLocalBounds().toFloat(), 3.0f);
+		}
+	}
+
 	ValueTree data;
 	UndoManager* um;
 
 protected:
 
+	float blinkAlpha = 0.0f;
 	Path targetIcon;
-
-private:
-
 	bool draggingEnabled = false;
 
 	JUCE_DECLARE_WEAK_REFERENCEABLE(CablePinBase);
 };
 
-struct ParameterComponent : public CablePinBase
+struct ParameterComponent : public CablePinBase,
+							public Slider::Listener
 {
 	struct Laf: public GlobalHiseLookAndFeel
 	{
+		void drawButtonBackground(Graphics& g, Button& button, const Colour& , bool isMouseOverButton, bool isButtonDown) override
+		{
+			float alpha = 0.05f;
+
+			if(isMouseOverButton)
+				alpha += 0.05f;
+
+			if(isButtonDown)
+				alpha += 0.1f;
+
+			g.setColour(Colours::white.withAlpha(alpha));
+			g.fillRoundedRectangle(button.getLocalBounds().toFloat().reduced(2, 1), 3.0f);
+		}
+
+		void drawButtonText(Graphics &g, TextButton &button, bool over, bool down) override
+		{
+			float alpha = 0.4f;
+
+			if (over)
+				alpha += 0.2f;
+			if (down)
+				alpha += 0.1f;
+
+			g.setColour(Colours::white.withAlpha(alpha));
+
+			if(button.isToggleable())
+			{
+				auto b = button.getLocalBounds().reduced(5.0f).toFloat();
+
+				auto c = b.removeFromRight(b.getHeight());
+
+				if(button.getToggleState())
+					g.fillEllipse(c);
+				else
+					g.drawEllipse(c, 1.0f);
+			}
+			else
+			{
+				Path p;
+
+				p.addTriangle({ 0.0f, 0.0f }, { 1.0f, 0.0f }, { 0.5f, 1.0f });
+
+				auto b = button.getLocalBounds().reduced(5.0f).toFloat();
+
+				PathFactory::scalePath(p, b.removeFromRight(13.0f));
+
+				
+				g.fillPath(p);
+			}
+			
+		}
 	} laf;
 
+	struct RangeComponent;
 
 	ParameterComponent(ValueTree v, UndoManager* um_) :
-		CablePinBase(v, um_)
+		CablePinBase(v, um_),
+		dropDown("")
 	{
 		jassert(v.getType() == PropertyIds::Parameter);
 		addAndMakeVisible(slider);
 		slider.setLookAndFeel(&laf);
-		slider.setRange(0.0, 1.0, 0.0);
+
+		auto nr = scriptnode::RangeHelpers::getDoubleRange(v);
+
+		slider.setNormalisableRange(nr.rng);
 		slider.setSliderStyle(Slider::RotaryHorizontalVerticalDrag);
 		slider.setTextBoxStyle(Slider::TextEntryBoxPosition::NoTextBox, false, 0, 0);
 
@@ -170,30 +269,98 @@ struct ParameterComponent : public CablePinBase
 
 		slider.getValueObject().referTo(v.getPropertyAsValue(PropertyIds::Value, um, false));
 
+		slider.addListener(this);
+
+		rangeUpdater.setCallback(data, RangeHelpers::getRangeIds(), Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onRange));
+
+		auto vtc = ValueToTextConverter::fromString(v[PropertyIds::TextToValueConverter].toString());
+
+		if(vtc.active)
+		{
+			slider.textFromValueFunction = vtc;
+			slider.valueFromTextFunction = vtc;
+		}
+
+		addChildComponent(dropDown);
+
+		if(!vtc.itemList.isEmpty())
+		{
+			dropDown.setLookAndFeel(&laf);
+			dropDown.setVisible(true);
+
+			if(vtc.itemList.size() == 2)
+			{
+				auto on = (int)data[PropertyIds::Value];
+				dropDown.setButtonText(vtc.itemList[on]);
+				dropDown.setClickingTogglesState(true);
+				dropDown.setToggleState(on, dontSendNotification);
+				
+				dropDown.onClick = [this, vtc]()
+				{
+					auto v = 1 - (int)dropDown.getToggleState();
+					data.setProperty(PropertyIds::Value, 1 - v, um);
+					dropDown.setButtonText(vtc.itemList[v]);
+				};
+			}
+			else
+			{
+				dropDown.onClick = [this, vtc]()
+				{
+					PopupMenu m;
+					m.setLookAndFeel(&laf);
+
+					auto value = (int)this->data[PropertyIds::Value];
+
+					for (int i = 0; i < vtc.itemList.size(); i++)
+					{
+						auto s = vtc.itemList[i];
+						s << " (" << String(i) << ')';
+
+						m.addItem(1 + i, s, true, i == value);
+					}
+
+					auto r = m.showAt(&dropDown);
+
+					if (r != 0)
+					{
+						data.setProperty(PropertyIds::Value, r - 1, um);
+						repaint();
+					}
+				};
+			}
+
+			
+			slider.setVisible(false);
+		}
+
 		setSize(Helpers::ParameterWidth, Helpers::ParameterHeight);
 
-		if(Helpers::isContainerNode(valuetree::Helpers::findParentWithType(v, PropertyIds::Node)))
+		auto parentNode = valuetree::Helpers::findParentWithType(v, PropertyIds::Node);
+
+		if(Helpers::isContainerNode(parentNode) && !Helpers::isFoldedOrLockedContainer(parentNode))
 		{
 			setEnableDragging(true);
 
 			if (!v.hasProperty(PropertyIds::NodeColour))
 			{
-				auto c = Helpers::getParameterColour(v);
+				auto c = ParameterHelpers::getParameterColour(v);
 				v.setProperty(PropertyIds::NodeColour, c.getARGB(), um);
 			}
 		}
 	};
 
+	void sliderValueChanged(Slider* s) override
+	{
+		repaint();
+	}
+
 	bool isOutsideParameter() const;
 
 	void paint(Graphics& g) override
 	{
-		if (Helpers::isContainerNode(getNodeTree()))
+		if (draggingEnabled)
 		{
-			g.setColour(Colours::black.withAlpha(0.2f));
-			g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(3.0f, 0.0f), 2.0f);
-
-			g.setColour(Helpers::getParameterColour(data));
+			g.setColour(ParameterHelpers::getParameterColour(data));
 			g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(3.0f, 0.0f).removeFromRight(4.0f), 2.0f);
 
 			g.setColour(Colours::white.withAlpha(0.5f));
@@ -202,24 +369,55 @@ struct ParameterComponent : public CablePinBase
 			g.fillPath(targetIcon);
 		}
 
+		drawBlinkState(g);
+
 		auto name = data[PropertyIds::ID].toString();
 		
 		
 		auto tb = getLocalBounds().toFloat();
-		tb.removeFromLeft(Helpers::ParameterHeight + Helpers::ParameterMargin);
 
+		tb.removeFromLeft(Helpers::ParameterMargin);
+
+		if(slider.isVisible())
+			tb.removeFromLeft(Helpers::ParameterHeight);
+		
 		if(isOutsideParameter())
 		{
-			g.setFont(GLOBAL_FONT());
-			auto rootId = Helpers::getHeaderTitle(valuetree::Helpers::findParentWithType(data, PropertyIds::Node));
-			g.setColour(Colours::white.withAlpha(0.4f));
-			g.drawText(rootId, tb.removeFromBottom(tb.getHeight() * 0.5), Justification::left);
-		}
+			auto sourceNode = valuetree::Helpers::findParentWithType(data, PropertyIds::Node);
 
-		g.setFont(GLOBAL_BOLD_FONT());
-		g.setColour(Colours::white);
+			g.setFont(GLOBAL_FONT());
+			auto rootId = Helpers::getHeaderTitle(sourceNode);
+			auto c = Helpers::getNodeColour(sourceNode);
+			
+			auto nb = tb.removeFromTop(tb.getHeight() * 0.5).reduced(1.0f);
+
+			nb.removeFromRight(getHeight());
+
+			auto tb = nb;
+
+			g.setColour(c.withAlpha(0.2f));
+			g.fillRect(nb);
+			g.setColour(c);
+			g.fillRect(nb.removeFromLeft(2));
+			
+
+			g.setColour(Colours::white.withAlpha(0.5f));
+			g.drawText(rootId, nb.reduced(3.0f, 0.0f), Justification::left);
+		}
+		else
+		{
+			g.setFont(GLOBAL_FONT());
+			g.setColour(Colours::white.withAlpha(0.6f));
+			g.drawText(slider.getTextFromValue(slider.getValue()), tb.reduced(0.0f, 2.0f), Justification::bottomLeft);
+		}
 		
-		g.drawText(name, tb, Justification::left);
+		g.setFont(GLOBAL_BOLD_FONT());
+		g.setColour(Colours::white.withAlpha(0.8f));
+		
+		g.drawText(name, tb.reduced(0.0f, 2.0f), Justification::topLeft);
+		
+
+		
 	}
 
 	Helpers::ConnectionType getConnectionType() const override { return Helpers::ConnectionType::Parameter; };
@@ -232,7 +430,21 @@ struct ParameterComponent : public CablePinBase
 
 	bool canBeTarget() const override { return true; }
 
+	void mouseDown(const MouseEvent& e) override;
+
 	String getTargetParameterId() const override { return data[PropertyIds::ID].toString(); }
+
+	Result getTargetErrorMessage(const ValueTree& requestedSource) const override
+	{
+		auto sourceParent = Helpers::findParentNode(requestedSource);
+
+		if(!data.isAChildOf(sourceParent) && requestedSource.getType() == PropertyIds::Parameter)
+			return Result::fail("Can't connect container parameter to outside node");
+
+		return CablePinBase::getTargetErrorMessage(requestedSource);
+	}
+
+	String getSourceDescription() const override { return Helpers::getHeaderTitle(getNodeTree()) + "." + getTargetParameterId(); }
 
 	ValueTree getConnectionTree() const override
 	{
@@ -243,11 +455,151 @@ struct ParameterComponent : public CablePinBase
 	{
 		auto b = getLocalBounds();
 
-		slider.setBounds(b.removeFromLeft(Helpers::ParameterHeight));
+		if(slider.isVisible())
+			slider.setBounds(b.removeFromLeft(Helpers::ParameterHeight));
+		else
+		{
+			b.removeFromRight(Helpers::ParameterMargin);
+			dropDown.setBounds(b.removeFromBottom(b.getHeight() / 2));
+		}
 	}
+
+	void onRange(const Identifier&, const var&)
+	{
+		auto nr = RangeHelpers::getDoubleRange(data);
+		slider.setNormalisableRange(nr.rng);
+	}
+
 	juce::Slider slider;
+
+	valuetree::PropertyListener rangeUpdater;
+
+	TextButton dropDown;
 };
 
+struct LockedTarget: public CablePinBase
+{
+	LockedTarget(const ValueTree& v, UndoManager* um):
+	  CablePinBase(v, um)
+	{
+		jassert(v.getType() == PropertyIds::Parameter);
+		setSize(Helpers::ParameterWidth, Helpers::ModulationOutputHeight);
+	}
+
+	Helpers::ConnectionType getConnectionType() const override { return Helpers::ConnectionType::Parameter; };
+
+	bool matchesConnectionType(Helpers::ConnectionType ct) const override
+	{
+		return ct != Helpers::ConnectionType::RoutableSignal;
+	}
+
+	String getSourceDescription() const override { return Helpers::getHeaderTitle(getNodeTree()) + "." + getTargetParameterId(); }
+
+	bool canBeTarget() const override { return true; }
+
+	String getTargetParameterId() const override { return data[PropertyIds::ID].toString(); }
+
+	void paint(Graphics& g) override
+	{
+		drawBlinkState(g);
+
+		g.setColour(Colours::white.withAlpha(0.5f));
+		g.setFont(GLOBAL_FONT());
+		
+		g.drawText(getSourceDescription(), getLocalBounds().toFloat().reduced(5.0f, 0.0f), Justification::left);
+	}
+
+	ValueTree getConnectionTree() const override
+	{
+		jassertfalse;
+		return {};
+	}
+};
+
+struct ModulationBridge: public CablePinBase
+{
+	ModulationBridge(const ValueTree& v, UndoManager* um):
+	  CablePinBase(v, um)
+	{
+		jassert(v.getType() == PropertyIds::ModulationTargets || v.getType() == PropertyIds::SwitchTarget);
+
+		setEnableDragging(true);
+		setRepaintsOnMouseActivity(true);
+
+		setSize(Helpers::ParameterWidth, Helpers::ParameterHeight);
+	}
+
+	Helpers::ConnectionType getConnectionType() const override { return Helpers::ConnectionType::Modulation; };
+
+	bool matchesConnectionType(Helpers::ConnectionType ct) const override
+	{
+		// can only connect to parameters
+		return ct == Helpers::ConnectionType::Parameter;
+	};
+
+	String getSourceDescription() const override 
+	{ 
+		String label;
+		label << Helpers::getHeaderTitle(getNodeTree());
+		label << ".Output";
+
+		if (data.getType() == PropertyIds::SwitchTarget)
+			label << " " + String(data.getParent().indexOf(data) + 1);
+
+		return label;
+	}
+
+	void paint(Graphics& g) override
+	{
+		g.setColour(Colours::white.withAlpha(isMouseOver() ? 0.8f : 0.5f));
+		g.setFont(GLOBAL_BOLD_FONT());
+
+		drawBlinkState(g);
+
+		auto sourceNode = valuetree::Helpers::findParentWithType(data, PropertyIds::Node);
+
+		auto c = Helpers::getNodeColour(sourceNode);
+
+		g.setColour(c);
+		g.fillRoundedRectangle(getLocalBounds().toFloat().reduced(3.0f, 0.0f).removeFromRight(4.0f), 2.0f);
+
+		auto b = getLocalBounds().toFloat();
+		auto tb = b.removeFromRight(getHeight()).toFloat();
+
+		scalePath(targetIcon, tb.reduced(10.0f));
+
+		g.fillPath(targetIcon);
+
+		auto rb = b.reduced(0, 5);
+
+
+
+		g.setColour(c.withAlpha(0.05f));
+		g.fillRect(rb);
+		g.setColour(c);
+		g.fillRect(rb.removeFromLeft(2));
+
+		g.setColour(Colours::white.withAlpha(0.5f));
+
+		String label = "from " + getSourceDescription();
+		b.removeFromLeft(5);
+
+		g.setFont(GLOBAL_FONT());
+		g.drawText(label, b, Justification::left);
+	}
+
+	bool canBeTarget() const override { return true; }
+	String getTargetParameterId() const override { return {}; }
+
+	ValueTree getConnectionTree() const override
+	{
+		auto conTree = data;
+		if (conTree.getType() == PropertyIds::SwitchTarget)
+			conTree = data.getChildWithName(PropertyIds::Connections);
+
+		return conTree;
+	}
+};
 
 struct ModOutputComponent : public CablePinBase
 {
@@ -260,6 +612,26 @@ struct ModOutputComponent : public CablePinBase
 
 	Helpers::ConnectionType getConnectionType() const override { return Helpers::ConnectionType::Modulation; };
 
+	String getSourceDescription() const override
+	{
+		String label;
+		label << Helpers::getHeaderTitle(getNodeTree());
+
+		if (data.hasProperty(PropertyIds::ID))
+		{
+			label << "." << data[PropertyIds::ID].toString();
+		}
+		else
+		{
+			label << ".Output";
+
+			if (data.getType() == PropertyIds::SwitchTarget)
+				label << " " + String(data.getParent().indexOf(data) + 1);
+		}
+
+		return label;
+	}
+
 	bool matchesConnectionType(Helpers::ConnectionType ct) const override
 	{
 		// can only connect to parameters
@@ -269,29 +641,21 @@ struct ModOutputComponent : public CablePinBase
 	bool canBeTarget() const override { return false; }
 	String getTargetParameterId() const override { return {}; }
 
-	
-
 	void paint(Graphics& g) override
 	{
 		g.setColour(Colours::white.withAlpha(isMouseOver() ? 0.8f : 0.5f));
 		g.setFont(GLOBAL_BOLD_FONT());
 
+		drawBlinkState(g);
+
 		auto b = getLocalBounds().toFloat();
 		auto tb = b.removeFromRight(getHeight()).toFloat();
 
-		scalePath(targetIcon, tb.reduced(4.0f));
+		scalePath(targetIcon, tb.reduced(8.0f));
 
 		g.fillPath(targetIcon);
 
-		if (data.getType() == PropertyIds::ModulationTargets)
-		{
-			g.drawText("Output", b, Justification::right);
-		}
-		else
-		{
-			auto idx = data.getParent().indexOf(data);
-			g.drawText("Output " + String(idx + 1), b, Justification::right);
-		}
+		g.drawText(getSourceDescription().fromFirstOccurrenceOf(".", false, false), b, Justification::right);
 	}
 
 	
@@ -304,8 +668,36 @@ struct ModOutputComponent : public CablePinBase
 
 		return conTree;
 	}
+};
 
+struct FoldedInput: public ParameterComponent
+{
+	FoldedInput(const ValueTree& v, UndoManager* um):
+	  ParameterComponent(v, um)
+	{
+		setSize(Helpers::ParameterWidth, Helpers::ParameterHeight);
+		slider.setVisible(false);
+	}
 
+	void paint(Graphics& g) override
+	{
+		auto b = getLocalBounds().toFloat();
+
+		drawBlinkState(g);
+
+		g.setFont(GLOBAL_BOLD_FONT());
+		g.setColour(Colours::white.withAlpha(0.2f));
+		g.drawText(getTargetParameterId(), b, Justification::left);
+	}
+};
+
+struct FoldedOutput : public ModOutputComponent
+{
+	FoldedOutput(const ValueTree& v, UndoManager* um):
+	  ModOutputComponent(v, um)
+	{
+		setSize(Helpers::ParameterWidth, Helpers::ParameterHeight);
+	}
 };
 
 struct BuildHelpers
@@ -314,9 +706,247 @@ struct BuildHelpers
 	{
 		ValueTree containerToInsert;
 		WeakReference<CablePinBase> source;
+		WeakReference<CablePinBase> target;
 		Point<int> pointInContainer;
 		int signalIndex = -1;
 	};
+
+	static void forEach(const ValueTree& root, const Identifier& typeId, const std::function<void(ValueTree&)>& f)
+	{
+		valuetree::Helpers::forEach(root, [&](ValueTree& v)
+		{
+			if(v.getType() == typeId)
+				f(v);
+
+			return false;
+		});
+	}
+
+	static void cleanBeforeMove(const Array<ValueTree>& nodesToBeMoved, ValueTree& newParent, UndoManager* um)
+	{
+		StringArray nodeIds;
+
+		auto newContainer = valuetree::Helpers::findParentWithType(newParent, PropertyIds::Node);
+
+		for(auto vToBeMoved: nodesToBeMoved)
+		{
+			if (vToBeMoved.getType() == PropertyIds::Node)
+			{
+				nodeIds.add(vToBeMoved[PropertyIds::ID]);
+
+				Array<ValueTree> connectionsToBeRemoved;
+
+				// Remove parameter connections if the node is dragged outside the container with the parameter connection
+				forEach(vToBeMoved, PropertyIds::Parameter, [&](ValueTree& p)
+				{
+					auto con = ParameterHelpers::getConnection(p);
+
+					if (con.isValid())
+					{
+						auto isParameterConnection = con.getParent().getParent().getType() == PropertyIds::Parameter;
+
+						if (isParameterConnection)
+						{
+							auto parameterContainer = valuetree::Helpers::findParentWithType(con, PropertyIds::Node);
+							auto ok = newContainer == parameterContainer || newParent.isAChildOf(parameterContainer);
+
+							if (!ok)
+								connectionsToBeRemoved.add(con);
+						}
+					}
+				});
+
+				for (auto c : connectionsToBeRemoved)
+				{
+					cleanBeforeDelete(c, um);
+					c.getParent().removeChild(c, um);
+				}
+
+				
+			}
+		}
+		
+		auto root = valuetree::Helpers::findParentWithType(newParent, PropertyIds::Network);
+		
+		forEach(root, PropertyIds::Connection, [&](ValueTree& con)
+		{
+			auto target = ParameterHelpers::getTarget(con);
+			auto connectionParentNode = Helpers::findParentNode(con);
+
+			for(auto& n: nodesToBeMoved)
+			{
+				if(target.isAChildOf(n))
+				{
+					auto hideCable = newParent != connectionParentNode;
+					con.setProperty(UIPropertyIds::HideCable, hideCable, um);
+					break;
+				}
+			}
+		});
+
+		auto removedGroups = removeFromGroups(root, nodeIds, um);
+
+		if(!removedGroups.isEmpty())
+		{
+			auto groups = newContainer.getOrCreateChildWithName(UIPropertyIds::Groups, um);
+
+			for(auto g: removedGroups)
+				groups.addChild(g, -1, um);
+		}
+	}
+	
+	static Array<ValueTree> removeFromGroups(const ValueTree& root, const StringArray& nodeIds, UndoManager* um)
+	{
+		Array<ValueTree> groupsToDelete;
+
+		forEach(root, UIPropertyIds::Group, [&](ValueTree& g)
+			{
+				auto idList = StringArray::fromTokens(g[PropertyIds::Value].toString(), ";", "");
+				auto before = idList.size();
+
+				for (auto& n : nodeIds)
+					idList.removeString(n);
+
+				if (idList.size() != before)
+				{
+					if (idList.isEmpty())
+						groupsToDelete.add(g);
+					else
+						g.setProperty(PropertyIds::Value, idList.joinIntoString(";"), um);
+				}
+			});
+
+		for (auto g : groupsToDelete)
+			g.getParent().removeChild(g, um);
+
+		return groupsToDelete;
+	}
+
+	static void cleanBeforeDelete(const ValueTree& vToBeDeleted, UndoManager* um)
+	{
+		auto root = valuetree::Helpers::findParentWithType(vToBeDeleted, PropertyIds::Network);
+
+		if(vToBeDeleted.getType() == PropertyIds::Node)
+		{
+			StringArray nodeIds;
+
+			forEach(vToBeDeleted, PropertyIds::Node, [&](ValueTree& v)
+			{
+				nodeIds.add(v[PropertyIds::ID]);
+			});
+
+			Array<ValueTree> connectionsToBeRemoved;
+
+			forEach(root, PropertyIds::Connection, [&](ValueTree& c)
+			{
+				if (nodeIds.contains(c[PropertyIds::NodeId].toString()))
+					connectionsToBeRemoved.add(c);
+			});
+
+			for(auto& c: connectionsToBeRemoved)
+			{
+				cleanBeforeDelete(c, um);
+				c.getParent().removeChild(c, um);
+			}
+
+			removeFromGroups(root, nodeIds, um);
+		}
+		else if (vToBeDeleted.getType() == PropertyIds::Connection)
+		{
+			auto path = ParameterHelpers::getParameterPath(vToBeDeleted);
+
+			if(ParameterHelpers::isNodeConnection(vToBeDeleted))
+			{
+				path = path.upToLastOccurrenceOf(".", false, false);
+
+				forEach(root, PropertyIds::Node, [&](ValueTree& n)
+				{
+					if (n[PropertyIds::ID].toString() == path)
+						n.removeProperty(PropertyIds::Automated, um);
+				});
+
+			}
+			else
+			{
+				forEach(root, PropertyIds::Parameter, [&](ValueTree& p)
+				{
+					if (ParameterHelpers::getParameterPath(p) == path)
+						p.removeProperty(PropertyIds::Automated, um);
+				});
+			}
+
+			
+		}
+	}
+
+	static void updateIdsRecursive(const ValueTree& rootNode, ValueTree& vToUpdate, std::map<String, String>& changes)
+	{
+		jassert(rootNode.getType() == PropertyIds::Network);
+		jassert(vToUpdate.getType() == PropertyIds::Node);
+
+		auto thisId = vToUpdate[PropertyIds::ID];
+		auto newId = Helpers::getUniqueId(thisId, rootNode);
+
+		changes[thisId] = newId;
+
+		if(thisId != newId)
+			vToUpdate.setProperty(PropertyIds::ID, newId, nullptr);
+
+		for(auto cn: vToUpdate.getChildWithName(PropertyIds::Nodes))
+			updateIdsRecursive(rootNode, cn, changes);
+	}
+
+	static void updateIds(const ValueTree& rootNode, Array<ValueTree>& nodesToUpdate)
+	{
+		jassert(rootNode.getType() == PropertyIds::Network);
+
+		for(auto& vToUpdate: nodesToUpdate)
+		{
+			jassert(vToUpdate.getType() == PropertyIds::Node);
+			jassert(!vToUpdate.isAChildOf(rootNode));
+		}
+
+		std::map<String, String> changes;
+
+		StringArray internalParameterConnections;
+		Array<ValueTree> connectionsToRemove;
+
+		for(auto& vToUpdate: nodesToUpdate)
+		{
+			updateIdsRecursive(rootNode, vToUpdate, changes);
+		}
+
+		for(auto& vToUpdate: nodesToUpdate)
+		{
+			forEach(vToUpdate, PropertyIds::Connection, [&](ValueTree& c)
+			{
+				auto n = c[PropertyIds::NodeId].toString();
+
+				if (changes.find(n) != changes.end())
+				{
+					c.setProperty(PropertyIds::NodeId, changes.at(n), nullptr);
+					internalParameterConnections.add(ParameterHelpers::getParameterPath(c));
+				}
+				else
+					connectionsToRemove.add(c);
+			});
+		}
+
+		for(auto c: connectionsToRemove)
+			c.getParent().removeChild(c, nullptr);
+
+		for(auto& vToUpdate: nodesToUpdate)
+		{
+			forEach(vToUpdate, PropertyIds::Parameter, [&](ValueTree& p)
+			{
+				if (p[PropertyIds::Automated])
+				{
+					if (!internalParameterConnections.contains(ParameterHelpers::getParameterPath(p)))
+						p.removeProperty(PropertyIds::Automated, nullptr);
+				}
+			});
+		}
+	}
 
 	static ValueTree createNode(const NodeDatabase& db, const String& factoryPath, const CreateData& cd, UndoManager* um)
 	{
@@ -330,7 +960,7 @@ struct BuildHelpers
 			return v;
 
 		if(cd.source != nullptr)
-			c = Helpers::getParameterColour(cd.source->data);
+			c = ParameterHelpers::getParameterColour(cd.source->data);
 
 		auto rt = valuetree::Helpers::findParentWithType(cd.containerToInsert, PropertyIds::Network);
 
@@ -346,7 +976,17 @@ struct BuildHelpers
 		v.setProperty(UIPropertyIds::x, cd.pointInContainer.getX(), nullptr);
 		v.setProperty(UIPropertyIds::y, cd.pointInContainer.getY() - yOffset, nullptr);
 
+		if(cd.target != nullptr)
+			v.setProperty(PropertyIds::Folded, true, nullptr);
+
+		Helpers::migrateFeedbackConnections(v, true, nullptr);
+
 		auto nodeTree = cd.containerToInsert.getChildWithName(PropertyIds::Nodes);
+
+		Array<ValueTree> list;
+		list.add(v);
+
+		updateIds(rt, list);
 
 		nodeTree.addChild(v, cd.signalIndex, um);
 
@@ -358,21 +998,45 @@ struct BuildHelpers
 			nc.setProperty(PropertyIds::NodeId, newId, nullptr);
 			nc.setProperty(PropertyIds::ParameterId, "Value", nullptr);
 			conTree.addChild(nc, -1, um);
-		}
 
-		if(cd.source != nullptr)
-		{
-			auto ptree = v.getChildWithName(PropertyIds::Parameters);
+			auto ptree = v.getOrCreateChildWithName(PropertyIds::Parameters, nullptr);
 			ptree.getChildWithProperty(PropertyIds::ID, "Value").setProperty(PropertyIds::Automated, true, nullptr);
 		}
 
-		auto rootContainer = rt.getChildWithName(PropertyIds::Node);
-
-		MessageManager::callAsync([rootContainer, um]()
+		if(cd.target != nullptr)
 		{
-			Helpers::fixOverlap(rootContainer, um, false);
-		});
+			auto con = ParameterHelpers::getConnection(cd.target->data);
 
+			jassert(con.isValid());
+			con.getParent().removeChild(con, um);
+			con.removeProperty(UIPropertyIds::CableOffset, um);
+
+			auto mt = v.getChildWithName(PropertyIds::ModulationTargets);
+
+			if(!mt.isValid())
+				mt = v.getChildWithName(PropertyIds::SwitchTargets).getChild(0);
+
+			auto nb = Helpers::getBounds(v, false);
+			
+
+			Helpers::translatePosition(cd.target->getNodeTree(), { nb.getWidth() + Helpers::NodeMargin, 0 }, um);
+
+			jassert(mt.isValid());
+			mt.addChild(con, -1, um);
+		}
+
+		auto rootContainer = Helpers::getCurrentRoot(cd.containerToInsert);
+
+		Helpers::updateChannelCount(valuetree::Helpers::getRoot(nodeTree), false, um);
+
+		if(cd.source == nullptr)
+		{
+			MessageManager::callAsync([rootContainer, um]()
+			{
+				Helpers::fixOverlap(rootContainer, um, false);
+			});
+		}
+		
 		return v;
 	}
 };

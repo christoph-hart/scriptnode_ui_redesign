@@ -35,6 +35,42 @@ MainComponent::MainComponent():
 		};
 	};
 
+	auto projects = File::getSpecialLocation(File::userApplicationDataDirectory).getChildFile("HISE/projects.xml");
+
+	if(auto xml = XmlDocument::parse(projects))
+	{
+		auto currentProject = xml->getStringAttribute("current");
+
+		if(File::isAbsolutePath(currentProject))
+		{
+			auto cf = File(currentProject).getChildFile("DspNetworks/ThirdParty");
+
+			if(cf.isDirectory())
+				db.setProjectDataFolder(cf);
+		}
+	}
+
+	db.processValueTrees([](ValueTree& v)
+	{
+		using namespace scriptnode;
+
+		ScopedPointer<NodeComponent> nc;
+
+		if (scriptnode::Helpers::isContainerNode(v))
+			nc = new ContainerComponent(nullptr, v, nullptr);
+		else if (scriptnode::Helpers::isProcessNode(v))
+			nc = new ProcessNodeComponent(nullptr, v, nullptr);
+		else
+			nc = new NoProcessNodeComponent(nullptr, v, nullptr);
+
+		v.setProperty(UIPropertyIds::width, nc->getWidth(), nullptr);
+		v.setProperty(UIPropertyIds::height, nc->getHeight(), nullptr);
+
+		nc = nullptr;
+	});
+
+
+
     attach(buttonDeselectAll, scriptnode::DspNetworkComponent::Action::DeselectAll);
     attach(buttonCut, scriptnode::DspNetworkComponent::Action::Cut);
     attach(buttonCopy, scriptnode::DspNetworkComponent::Action::Copy);
@@ -65,6 +101,7 @@ MainComponent::MainComponent():
 
     viewport.setScrollOnDragEnabled(true);
 
+	viewport.setMaxZoomFactor(1.5);
 	viewport.setMouseWheelScrollEnabled(true);
 
     setSize (3000, 900);
@@ -84,7 +121,9 @@ MainComponent::MainComponent():
 				setRootValueTree(currentTree);
 				setMillisecondsBetweenUpdate(1000);
 				
-                viewport.setNewContent(new scriptnode::DspNetworkComponent(currentTree), nullptr);
+				auto rootContainer = currentTree.getChild(0);
+
+                viewport.setNewContent(new scriptnode::DspNetworkComponent(currentTree, rootContainer), nullptr);
                 resized();
             }
         }

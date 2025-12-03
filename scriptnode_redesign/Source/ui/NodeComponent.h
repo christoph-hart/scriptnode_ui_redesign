@@ -97,7 +97,7 @@ struct SelectableComponent: public ChangeListener
 					auto v = s->getValueTree();
 
 					if(typeMatch.isNull() || typeMatch == v.getType())
-						list.add(v);
+						list.addIfNotAlreadyThere(v);
 				}
 			}
 
@@ -179,13 +179,20 @@ struct SelectableComponent: public ChangeListener
 
 		Result deleteSelection()
 		{
+			cleanupSelection();
+
 			std::vector<ValueTree> toBeRemoved;
 
 			for (auto nc : getLassoSelection().getItemArray())
 				toBeRemoved.push_back(nc->getValueTree());
 			
 			for(const auto& v: toBeRemoved)
+			{
+				BuildHelpers::cleanBeforeDelete(v, &um);
 				v.getParent().removeChild(v, &um);
+			}
+			
+			selection.deselectAll();
 
 			return Result::ok();
 		}
@@ -234,19 +241,20 @@ struct SelectableComponent: public ChangeListener
 			for (auto& n : list)
 			{
 				auto copy = n.createCopy();
-
 				auto n = Helpers::getHeaderTitle(copy);
-
 				copy.setProperty(PropertyIds::Name, n, nullptr);
-				auto newId = Helpers::getUniqueId(copy[PropertyIds::ID].toString(), rootTree);
-				copy.setProperty(PropertyIds::ID, newId, nullptr);
-
 				Helpers::translatePosition(copy, { deltaX, deltaY }, nullptr);
-				container.getChildWithName(PropertyIds::Nodes).addChild(copy, insertIndex++, &um);
 				newTrees.add(copy);
 			}
 
-			Helpers::fixOverlap(rootTree.getChildWithName(PropertyIds::Node), &um, false);
+
+			BuildHelpers::updateIds(rootTree, newTrees);
+
+			for(auto n: newTrees)
+				container.getChildWithName(PropertyIds::Nodes).addChild(n, insertIndex++, &um);
+
+			Helpers::updateChannelCount(rootTree, false, &um);
+			Helpers::fixOverlap(Helpers::getCurrentRoot(container), &um, false);
 
 			MessageManager::callAsync([newTrees, this]()
 			{
@@ -297,6 +305,72 @@ struct SelectableComponent: public ChangeListener
 			return selection;
 		}
 
+		bool navigateSelection(const KeyPress& k)
+		{
+			if(selection.getNumSelected() == 0)
+				return false;
+
+			auto inc = k == KeyPress::rightKey || k == KeyPress::downKey;
+			auto sibling = k == KeyPress::leftKey || k == KeyPress::rightKey;
+
+			auto currentNodes = createTreeListFromSelection(PropertyIds::Node);
+				
+			Array<ValueTree> nextNodes;
+
+			RectangleList<int> bounds;
+
+			for(const auto& s: selection.getItemArray())
+			{
+				if(s.get() != nullptr)
+				{
+					auto vt = s->getValueTree();
+
+					if(vt.getType() != PropertyIds::Node)
+						continue;
+
+					if(sibling)
+					{
+						auto idx = vt.getParent().indexOf(vt);
+
+						auto newIndex = jlimit<int>(0, vt.getParent().getNumChildren()-1, idx + (inc ? 1 : -1));
+						nextNodes.add(vt.getParent().getChild(newIndex));
+					}
+					else
+					{
+						ValueTree nextNode;
+
+						if(inc)
+							nextNode = vt.getChildWithName(PropertyIds::Nodes).getChild(0);
+						else
+							nextNode = valuetree::Helpers::findParentWithType(vt, PropertyIds::Node);
+							
+						if (nextNode.isValid())
+							nextNodes.add(nextNode);
+					}
+				}
+			}
+
+			for(const auto& n: nextNodes)
+			{
+				bounds.addWithoutMerging(Helpers::getBoundsInRoot(n, false));
+			}
+
+			if(k.getModifiers().isCommandDown() || k.getModifiers().isShiftDown())
+			{
+				for(auto s: currentNodes)
+					nextNodes.addIfNotAlreadyThere(s);
+			}
+
+			setSelection(nextNodes);
+
+			auto zp = dynamic_cast<Component*>(this)->findParentComponentOfClass<ZoomableViewport>();
+
+			if(zp != nullptr)
+				zp->zoomToRectangle(bounds.getBounds());
+
+			return !nextNodes.isEmpty();
+		}
+
 		void cleanupSelection()
 		{
 			auto currentSelection = selection.getItemArray();
@@ -306,6 +380,8 @@ struct SelectableComponent: public ChangeListener
 				if(s.get() == nullptr)
 					selection.deselect(s);
 			}
+
+			currentSelection = selection.getItemArray();
 
 			for(auto& s: currentSelection)
 			{
@@ -328,17 +404,21 @@ struct SelectableComponent: public ChangeListener
 		Selection selection;
 
 		scriptnode::NodeDatabase db;
+
+		JUCE_DECLARE_WEAK_REFERENCEABLE(Lasso);
 	};
 
-	SelectableComponent(Lasso& l):
+	SelectableComponent(Lasso* l):
 	  lasso(l)
 	{
-		lasso.getLassoSelection().addChangeListener(this);
+		if(lasso != nullptr)
+			lasso->getLassoSelection().addChangeListener(this);
 	}
 
 	~SelectableComponent() override
 	{
-		lasso.getLassoSelection().removeChangeListener(this);
+		if(lasso != nullptr)
+			lasso->getLassoSelection().removeChangeListener(this);
 	};
 
 	bool isNode() const { return getValueTree().getType() == PropertyIds::Node; }
@@ -362,7 +442,7 @@ struct SelectableComponent: public ChangeListener
 
 	virtual ValueTree getValueTree() const = 0;
 
-	Lasso& lasso;
+	Lasso* lasso;
 	bool selected = false;
 
 	JUCE_DECLARE_WEAK_REFERENCEABLE(SelectableComponent);
@@ -382,8 +462,13 @@ struct NodeComponent : public Component,
 			closeButton("delete", nullptr, parent_),
 			dragger()
 		{
+			
+			
+
 			addAndMakeVisible(powerButton);
-			addAndMakeVisible(closeButton);
+
+			if(!Helpers::isRootNode(v))
+				addChildComponent(closeButton);
 
 			powerButton.setToggleModeWithColourChange(true);
 
@@ -398,9 +483,35 @@ struct NodeComponent : public Component,
 			closeButton.onClick = [this]()
 			{
 				auto data = parent.getValueTree();
+				BuildHelpers::cleanBeforeDelete(data, parent.um);
 				data.getParent().removeChild(data, parent.um);
 			};
+
+			if(Helpers::isRootNode(v))
+			{
+				valuetree::Helpers::forEachParent(parent.getValueTree(), [this](ValueTree& n)
+				{
+					if(n.getType() == PropertyIds::Node && n != parent.getValueTree())
+					{
+						addAndMakeVisible(breadcrumbs.add(new BreadcrumbButton(n)));
+					}
+						
+					return false;
+				});
+			}
 		};
+
+		
+
+		void mouseEnter(const MouseEvent& e) override
+		{
+			closeButton.setVisible(true);
+		}
+
+		void mouseExit(const MouseEvent& e) override
+		{
+			closeButton.setVisible(getLocalBounds().contains(e.getPosition()));
+		}
 
 		void resized() override
 		{
@@ -408,8 +519,14 @@ struct NodeComponent : public Component,
 
 			auto b = getLocalBounds();
 			powerButton.setBounds(b.removeFromLeft(getHeight()).reduced(2));
+
+			for(int i = breadcrumbs.size() - 1; i >= 0; i--)
+				breadcrumbs[i]->setBounds(b.removeFromLeft(breadcrumbs[i]->getWidth()));
+
 			closeButton.setBounds(b.removeFromRight(getHeight()).reduced(2));
 		}
+
+		String getSourceDescription() const override { return ""; }
 
 		Helpers::ConnectionType getConnectionType() const override { return Helpers::ConnectionType::Bypassed; };
 
@@ -428,8 +545,21 @@ struct NodeComponent : public Component,
 
 		bool matchesConnectionType(Helpers::ConnectionType ct) const override
 		{
-			return ct == Helpers::ConnectionType::Parameter;
+			return ct != Helpers::ConnectionType::RoutableSignal;
 		};
+
+		Result getTargetErrorMessage(const ValueTree& requestedSource) const override
+		{
+			if(!ParameterHelpers::isSoftBypassNode(data))
+				return Result::fail("Only connectable to a container.soft_bypass");
+
+			auto pn = Helpers::findParentNode(requestedSource);
+
+			if(!data.isAChildOf(pn))
+				return Result::fail("Can't connect to outside bypass");
+
+			return CablePinBase::getTargetErrorMessage(requestedSource);
+		}
 
 		bool canBeTarget() const override { return true; }
 
@@ -437,11 +567,7 @@ struct NodeComponent : public Component,
 
 		ValueTree getConnectionTree() const override { return {}; }
 
-		void mouseDoubleClick(const MouseEvent& event) override
-		{
-			parent.toggle(PropertyIds::Folded);
-			Helpers::fixOverlap(parent.getValueTree(), parent.um, false);
-		}
+		void mouseDoubleClick(const MouseEvent& event) override;
 
 		void mouseDown(const MouseEvent& e) override;
 
@@ -465,21 +591,159 @@ struct NodeComponent : public Component,
 			g.fillRect(getLocalBounds().removeFromTop(1));
 			g.setColour(Colours::white);
 
-			
-
 			if (powerButton.isVisible())
 				b.removeFromLeft(getHeight());
 			else
 				b.removeFromLeft(5);
 
 			g.setFont(GLOBAL_FONT());
+
+			for(auto bc: breadcrumbs)
+				b.removeFromLeft(bc->getWidth());
+
 			g.drawText(Helpers::getHeaderTitle(parent.getValueTree()), b, Justification::left);
 		}
+
+		struct BreadcrumbButton: public Component
+		{
+			BreadcrumbButton(const ValueTree& n):
+			  data(n)
+			{
+				setMouseCursor(MouseCursor::PointingHandCursor);
+				jassert(n.getType() == PropertyIds::Node);
+
+				auto w = GLOBAL_FONT().getStringWidth(Helpers::getHeaderTitle(n)) + 20 + 6;
+				auto h = Helpers::HeaderHeight;
+				setSize(w, h);
+				setRepaintsOnMouseActivity(true);
+			}
+
+			void paint(Graphics& g) override
+			{
+				g.setFont(GLOBAL_FONT());
+
+				float alpha = 0.5f;
+				if(isMouseOver())
+					alpha += 0.2f;
+
+				if(isMouseButtonDown())
+					alpha += 0.1;
+
+				auto b = getLocalBounds().toFloat().reduced(3.0f, 0.0f);
+
+				auto rb = b.removeFromRight(20.0f);
+
+				g.setColour(Colours::white.withAlpha(0.1f));
+				g.drawText("::", rb, Justification::centred);
+				g.setColour(Colours::white.withAlpha(alpha));
+				g.drawText(Helpers::getHeaderTitle(data), b, Justification::left);
+			}
+
+			void mouseUp(const MouseEvent& e) override;
+
+			ValueTree data;
+		};
 
 		NodeComponent& parent;
 		HiseShapeButton closeButton;
 		HiseShapeButton powerButton;
+
+		OwnedArray<BreadcrumbButton> breadcrumbs;
+
 		juce::ComponentDragger dragger;
+	};
+
+	struct PopupComponent: public Component
+	{
+		PopupComponent(const ValueTree& v, UndoManager* um_):
+		  data(v),
+		  um(um_)
+		{
+			dummyBody = DummyBody::createDummyComponent(v[PropertyIds::FactoryPath].toString());
+
+			if(dummyBody != nullptr)
+				addAndMakeVisible(dummyBody);
+
+			for (auto p : data.getChildWithName(PropertyIds::Parameters))
+			{
+				addAndMakeVisible(parameters.add(new ParameterComponent(p, um)));
+			}
+
+			auto modOutput = data.getChildWithName(PropertyIds::ModulationTargets);
+
+			if (modOutput.isValid())
+				addAndMakeVisible(modOutputs.add(new ModOutputComponent(modOutput, um)));
+
+			for (auto st : data.getChildWithName(PropertyIds::SwitchTargets))
+				addAndMakeVisible(modOutputs.add(new ModOutputComponent(st, um)));
+
+			auto w = 0;
+
+			if(!parameters.isEmpty())
+				w += Helpers::ParameterMargin + Helpers::ParameterWidth;
+
+			if(!modOutputs.isEmpty())
+				w += Helpers::ModulationOutputWidth;
+
+			auto h = parameters.size() * (Helpers::ParameterHeight + Helpers::ParameterMargin);
+
+			h = jmax(h, modOutputs.size() * (Helpers::ModulationOutputHeight + Helpers::ParameterMargin));
+
+			if(dummyBody != nullptr)
+			{
+				w = jmax(dummyBody->getWidth(), w);
+				h += dummyBody->getHeight();
+			}
+
+			setSize(w, h);
+		}
+
+		void paint(Graphics& g) override
+		{
+			g.setColour(Colour(0xFF353535));
+			g.fillRoundedRectangle(getLocalBounds().toFloat(), 4.0f);
+		}
+
+		void resized() override
+		{
+			auto b = getLocalBounds();
+
+			if(dummyBody != nullptr)
+			{
+				auto db = b.removeFromTop(dummyBody->getHeight());
+				db = db.withSizeKeepingCentre(dummyBody->getWidth(), dummyBody->getHeight());
+				dummyBody->setBounds(db);
+			}
+
+			if(!parameters.isEmpty())
+			{
+				b.removeFromLeft(Helpers::ParameterMargin);
+				auto pb = b.removeFromLeft(Helpers::ParameterWidth);
+
+				for(auto p: parameters)
+				{
+					p->setBounds(pb.removeFromTop(Helpers::ParameterHeight));
+					pb.removeFromTop(Helpers::ParameterMargin);
+				}
+					
+			}
+			if(!modOutputs.isEmpty())
+			{
+				auto mb = b.removeFromRight(Helpers::ModulationOutputWidth);
+				
+				for(auto m: modOutputs)
+				{
+					m->setBounds(mb.removeFromTop(Helpers::ModulationOutputHeight));
+					mb.removeFromTop(Helpers::ParameterMargin);
+				}
+			}
+		}
+
+		ValueTree data;
+		UndoManager* um;
+		OwnedArray<ParameterComponent> parameters;
+		OwnedArray<ModOutputComponent> modOutputs;
+		ScopedPointer<Component> dummyBody;
 	};
 
 	void toggle(const Identifier& id)
@@ -488,7 +752,7 @@ struct NodeComponent : public Component,
 		data.setProperty(id, !v, um);
 	}
 
-	NodeComponent(Lasso& l, const ValueTree& v, UndoManager* um_, bool useSignal) :
+	NodeComponent(Lasso* l, const ValueTree& v, UndoManager* um_, bool useSignal) :
 		SelectableComponent(l),
 		data(v),
 		um(um_),
@@ -511,24 +775,11 @@ struct NodeComponent : public Component,
 
 		setBounds(Helpers::getBounds(v, false));
 
-		for (auto p : data.getChildWithName(PropertyIds::Parameters))
-		{
-			addAndMakeVisible(parameters.add(new ParameterComponent(p, um)));
-		}
-
-		auto modOutput = data.getChildWithName(PropertyIds::ModulationTargets);
-
-		if (modOutput.isValid())
-		{
-			addAndMakeVisible(modOutputs.add(new ModOutputComponent(modOutput, um)));
-		}
-
-		for (auto st : data.getChildWithName(PropertyIds::SwitchTargets))
-			addAndMakeVisible(modOutputs.add(new ModOutputComponent(st, um)));
+		rebuildDefaultParametersAndOutputs();
 
 		colourListener.setCallback(data, { PropertyIds::NodeColour }, Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onColour));
 
-		resized();
+		
 	};
 
 	virtual ~NodeComponent() = default;
@@ -547,19 +798,42 @@ struct NodeComponent : public Component,
 		LOAD_EPATH_IF_URL("delete", HiBinaryData::ProcessorEditorHeaderIcons::closeIcon);
 		LOAD_EPATH_IF_URL("lock", EditorIcons::lockShape);
 		LOAD_EPATH_IF_URL("add", HiBinaryData::ProcessorEditorHeaderIcons::addIcon);
+		LOAD_EPATH_IF_URL("goto", ColumnIcons::openWorkspaceIcon);
 
 		return p;
 	}
 
 	void onPositionUpdate(const Identifier&, const var&)
 	{
+		auto pos = Helpers::getPosition(data);
+		DBG(Helpers::getHeaderTitle(getValueTree()) + ": " + pos.toString());
+
 		setTopLeftPosition(Helpers::getPosition(data));
 	}
 
-	virtual void onFold(const Identifier& id, const var& newValue)
+	virtual void onFold(const Identifier& id, const var& newValue);
+
+	void rebuildDefaultParametersAndOutputs()
 	{
-		auto boundsToUse = Helpers::getBounds(getValueTree(), false);
-		setBounds(boundsToUse);
+		parameters.clear();
+		modOutputs.clear();
+
+		for (auto p : data.getChildWithName(PropertyIds::Parameters))
+		{
+			addAndMakeVisible(parameters.add(new ParameterComponent(p, um)));
+		}
+
+		auto modOutput = data.getChildWithName(PropertyIds::ModulationTargets);
+
+		if (modOutput.isValid())
+		{
+			addAndMakeVisible(modOutputs.add(new ModOutputComponent(modOutput, um)));
+		}
+
+		for (auto st : data.getChildWithName(PropertyIds::SwitchTargets))
+			addAndMakeVisible(modOutputs.add(new ModOutputComponent(st, um)));
+
+		resized();
 	}
 
 	void resized() override
@@ -572,37 +846,34 @@ struct NodeComponent : public Component,
 
 		Rectangle<int> pb;
 
+		auto ParameterWidth = Helpers::ParameterWidth;
+
+		if (getValueTree()[PropertyIds::Folded])
+			ParameterWidth -= Helpers::ParameterHeight;
+
 		if(!parameters.isEmpty())
-			pb = b.removeFromLeft(Helpers::ParameterMargin + Helpers::ParameterWidth);
+			pb = b.removeFromLeft(Helpers::ParameterMargin + ParameterWidth);
 
 		pb.removeFromLeft(Helpers::ParameterMargin);
 
-		auto folded = data[PropertyIds::Folded];
-
-		for(auto p: parameters)
-			p->setVisible(!folded);
-
-		for(auto m: modOutputs)
-			m->setVisible(!folded);
-
-		if(folded)
-			return;
-
-		auto mb = b.removeFromRight(Helpers::ParameterWidth);
+		auto mb = b.removeFromRight(Helpers::ModulationOutputWidth);
 
 		for (auto p: parameters)
 		{
-			pb.removeFromTop(Helpers::ParameterMargin);
 			p->setBounds(pb.removeFromTop(getParameterHeight()));
+			pb.removeFromTop(Helpers::ParameterMargin);
 		}
 
 		for (auto m : modOutputs)
 		{
-			m->setBounds(mb.removeFromTop(24));
+			m->setBounds(mb.removeFromTop(Helpers::ModulationOutputHeight));
+			mb.removeFromTop(Helpers::ParameterMargin);
 		}
 	}
 
 	ValueTree getValueTree() const override { return data; }
+
+	UndoManager* getUndoManager() { return um; }
 
 	const bool hasSignal;
 
@@ -612,36 +883,48 @@ struct NodeComponent : public Component,
 	{
 		int x = 0;
 
+		auto ParameterWidth = Helpers::ParameterWidth;
+
+		if (getValueTree()[PropertyIds::Folded])
+			ParameterWidth -= Helpers::ParameterHeight;
+		
 		if (!parameters.isEmpty())
-			x += Helpers::ParameterMargin + Helpers::ParameterWidth;
+			x += Helpers::ParameterMargin + ParameterWidth;
 
 		int y = Helpers::HeaderHeight;
 
-		if(!hasSignal)
+		
+
+		if(false && !hasSignal)
 			x += extraBounds.getWidth();
 
 		if (!modOutputs.isEmpty())
-			x += Helpers::ParameterWidth;
-
-		if (Helpers::hasRoutableSignal(getValueTree()))
-			y += Helpers::SignalHeight;
+			x += Helpers::ModulationOutputWidth;
 
 		if (hasSignal)
 			y += Helpers::SignalHeight;
 
+		if (Helpers::hasRoutableSignal(data))
+			y += Helpers::SignalHeight;
+
 		int bodyHeight = 0;
 
-		auto parameterHeight = jmax(parameters.size() * (Helpers::ParameterMargin + getParameterHeight()), modOutputs.size() * 24) + Helpers::ParameterMargin;
+		auto parameterHeight = parameters.size() * (Helpers::ParameterMargin + getParameterHeight());
+		auto modHeight = modOutputs.size() * (Helpers::ModulationOutputHeight + Helpers::ParameterMargin);
+		
+		parameterHeight = jmax(parameterHeight, modHeight);
 
-		if(hasSignal)
+		if(true || hasSignal)
 			bodyHeight = extraBounds.getHeight() + parameterHeight;
 		else
 			bodyHeight = jmax(extraBounds.getHeight(), parameterHeight);
 
 		x = jmax(x, GLOBAL_FONT().getStringWidth(Helpers::getHeaderTitle(getValueTree())) + 20 + 2 * Helpers::HeaderHeight);
 
-		if(hasSignal)
-			x = jmax(x, extraBounds.getWidth());
+		x = jmax(x, extraBounds.getWidth());
+
+		if(Helpers::hasRoutableSignal(data))
+			x = jmax(x, Helpers::ParameterWidth + 2 * Helpers::ParameterMargin);
 
 		Rectangle<int> nb(getPosition(), getPosition().translated(x, y + bodyHeight));
 
@@ -650,6 +933,8 @@ struct NodeComponent : public Component,
 		setSize(x, y + bodyHeight);
 		resized();
 	}
+
+	virtual Component* createPopupComponent() { return new PopupComponent(getValueTree(), um); }
 
 	void mouseDown(const MouseEvent& e) override
 	{
@@ -686,6 +971,118 @@ protected:
 	valuetree::PropertyListener colourListener;
 
 	HeaderComponent header;
+};
+
+struct ContainerComponentBase
+{
+	virtual ~ContainerComponentBase() = default;
+
+	NodeComponent& asNodeComponent() { return *dynamic_cast<NodeComponent*>(this); }
+
+	virtual CablePinBase* createOutsideParameterComponent(const ValueTree& source) = 0;
+	
+	void rebuildOutsideParameters()
+	{
+		auto before = outsideParameters.size();
+
+		outsideParameters.clear();
+
+		auto pTrees = ParameterHelpers::getAutomatedChildParameters(asNodeComponent().getValueTree());
+
+		auto isLocked = (bool)asNodeComponent().getValueTree()[PropertyIds::Locked];
+
+		for (auto p : pTrees)
+		{
+			auto source = ParameterHelpers::getConnection(p);
+
+			if (!isLocked && !source[UIPropertyIds::HideCable])
+				continue;
+
+			auto conParent = ParameterHelpers::findConnectionParent(source);
+
+			auto found = false;
+
+			for(auto op: outsideParameters)
+			{
+				if(op->data == conParent)
+				{
+					found = true;
+					break;
+				}
+			}
+
+			if(found)
+				continue;
+
+			if(auto np = createOutsideParameterComponent(source))
+			{
+				outsideParameters.add(np);
+				asNodeComponent().addAndMakeVisible(np);
+			}
+		}
+
+		onOutsideParameterChange(before, outsideParameters.size());
+	}
+
+	virtual void onOutsideParameterChange(int before, int now)
+	{
+		asNodeComponent().resized();
+		asNodeComponent().repaint();
+	}
+
+	void drawOutsideLabel(Graphics& g)
+	{
+		if (!outsideLabel.isEmpty() && !outsideParameters.isEmpty())
+		{
+			g.setFont(GLOBAL_FONT());
+			g.setColour(Colours::white.withAlpha(0.3f));
+			g.drawText("External Connections", outsideLabel.toFloat(), Justification::centred);
+		}
+	}
+
+	int getNumOutsideParameters() const { return outsideParameters.size(); }
+
+	CablePinBase* getOutsideParameter(int index) const { return outsideParameters[index]; }
+
+	CablePinBase* getOutsideParameter(const ValueTree& pTree)
+	{
+		jassert(pTree.getType() == PropertyIds::Parameter ||
+			pTree.getType() == PropertyIds::ModulationTargets ||
+			pTree.getType() == PropertyIds::SwitchTarget ||
+			ParameterHelpers::isRoutingSendNode(pTree));
+
+		for (auto op : outsideParameters)
+		{
+			if (op->data == pTree)
+				return op;
+		}
+
+		return nullptr;
+	}
+
+	void positionOutsideParameters(int yOffset)
+	{
+		if (!outsideParameters.isEmpty())
+		{
+			outsideLabel = { 0.0f, (float)yOffset, (float)(Helpers::ParameterMargin + Helpers::ParameterWidth), 20.0f };
+			yOffset += 25;
+		}
+
+		for (auto op : outsideParameters)
+		{
+			yOffset += Helpers::ParameterMargin;
+			op->setTopLeftPosition(Helpers::ParameterMargin, yOffset);
+			yOffset += op->getHeight();
+		}
+	}
+
+private:
+
+	OwnedArray<CablePinBase> outsideParameters;
+
+	Rectangle<float> outsideLabel;
+
+	JUCE_DECLARE_WEAK_REFERENCEABLE(ContainerComponentBase);
 };
 
 }

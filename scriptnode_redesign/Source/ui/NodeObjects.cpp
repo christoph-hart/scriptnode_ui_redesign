@@ -36,4 +36,36 @@ using namespace juce;
 
 
 
+LockedContainerComponent::LockedContainerComponent(Lasso* l, const ValueTree& v, UndoManager* um_) :
+	ProcessNodeComponent(l, v, um_),
+	gotoButton("goto", nullptr, *this)
+{
+	for (auto cn : v.getChildWithName(PropertyIds::Nodes))
+	{
+		if (Helpers::getFactoryPath(cn).second == "locked_mod")
+		{
+			auto mt = cn.getOrCreateChildWithName(PropertyIds::ModulationTargets, um);
+			addAndMakeVisible(modOutputs.add(new ModOutputComponent(mt, um)));
+
+			// TODO: add support for more?
+			break;
+		}
+	}
+
+	setFixSize({});
+
+	gotoButton.onClick = [this]()
+	{
+		DspNetworkComponent::switchRootNode(this, getValueTree());
+	};
+
+	header.addAndMakeVisible(gotoButton);
+}
+
+Component* LockedContainerComponent::createPopupComponent()
+{
+	auto p = DspNetworkComponent::Parent::getParent(this);
+	return new DspNetworkComponent::Parent::Map(getValueTree(), *p, {});
+}
+
 }

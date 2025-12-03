@@ -36,12 +36,49 @@ using namespace juce;
 
 
 
+void NodeComponent::HeaderComponent::mouseDoubleClick(const MouseEvent& event)
+{
+	if(Helpers::isRootNode(parent.getValueTree()))
+		return;
+
+	if(event.mods.isRightButtonDown())
+		return;
+
+	if (parent.getValueTree()[PropertyIds::Locked])
+	{
+		DspNetworkComponent::switchRootNode(this, parent.getValueTree());
+	}
+	else
+	{
+		parent.toggle(PropertyIds::Folded);
+
+		Helpers::fixOverlap(parent.getValueTree(), parent.um, false);
+
+		auto c = parent.findParentComponentOfClass<ContainerComponent>();
+
+		MessageManager::callAsync([c]()
+		{
+			c->cables.updatePins(*c);
+		});
+	}
+}
+
 void NodeComponent::HeaderComponent::mouseDown(const MouseEvent& e)
 {
 	CHECK_MIDDLE_MOUSE_DOWN(e);
 
 	if(Helpers::isRootNode(parent.getValueTree()))
 		return;
+
+	if(e.mods.isRightButtonDown())
+	{
+		if(auto pc = parent.createPopupComponent())
+		{
+			DspNetworkComponent::showPopup(pc, &parent);
+		}
+
+		return;
+	}
 
 	downPos = e.getPosition();
 	parent.toFront(false);
@@ -128,7 +165,10 @@ void NodeComponent::HeaderComponent::mouseDrag(const MouseEvent& e)
 			}
 
 			auto rootContainer = dynamic_cast<ContainerComponent*>(root->rootComponent.get());
-			root->currentlyHoveredContainer = rootContainer->getInnerContainer(root, parent.getBoundsInParent().getCentre(), &parent);
+
+			auto rootPos = rootContainer->getLocalPoint(this, downPos);
+
+			root->currentlyHoveredContainer = rootContainer->getInnerContainer(root, rootPos, &parent);
 
 			if (parent.hasSignal && root->currentlyHoveredContainer != nullptr)
 			{
@@ -162,6 +202,9 @@ void NodeComponent::HeaderComponent::mouseUp(const MouseEvent& e)
 	if (Helpers::isRootNode(parent.getValueTree()))
 		return;
 
+	if(e.mods.isRightButtonDown())
+		return;
+
 	auto root = findParentComponentOfClass<DspNetworkComponent>();
 
 	selectionPositions.clear();
@@ -172,13 +215,11 @@ void NodeComponent::HeaderComponent::mouseUp(const MouseEvent& e)
 
 		root->resetDraggedBounds();
 
-		
-
 		if (root->currentlyHoveredContainer != nullptr)
 		{
 			auto dropIndex = root->currentlyHoveredContainer->cables.dropIndex;
 
-			if (dropIndex != -1)
+			if (dropIndex != -1 || !parent.hasSignal)
 			{
 				//auto newBounds = root->currentlyHoveredContainer->cables.dragPosition;
 				//Helpers::updateBounds(parent.getValueTree(), newBounds, parent.um);
@@ -194,7 +235,7 @@ void NodeComponent::HeaderComponent::mouseUp(const MouseEvent& e)
 
 				root->clearDraggedComponents();
 
-				std::vector<ValueTree> nodesToMove;
+				Array<ValueTree> nodesToMove;
 
 				for(auto l: root->getLassoSelection().getItemArray())
 				{
@@ -202,17 +243,19 @@ void NodeComponent::HeaderComponent::mouseUp(const MouseEvent& e)
 					{
 						auto vt = l->getValueTree();
 						if (vt.getType() == PropertyIds::Node)
-							nodesToMove.push_back(l->getValueTree());
+							nodesToMove.add(l->getValueTree());
 					}
 				}
 				
+				BuildHelpers::cleanBeforeMove(nodesToMove, newParent, um);
+
 				for(const auto& n: nodesToMove)
 				{
 					n.getParent().removeChild(n, um);
 					newParent.addChild(n, dropIndex++, um);
 				}
 
-				Helpers::fixOverlap(root->data.getChildWithName(PropertyIds::Node), um, false);
+				Helpers::fixOverlap(Helpers::getCurrentRoot(parent.getValueTree()), um, false);
 
 				callRecursive<ContainerComponent>(root, [](ContainerComponent* c){ c->cables.setDragPosition({}, {}); return false; });
 				root->rebuildCables();
@@ -221,20 +264,18 @@ void NodeComponent::HeaderComponent::mouseUp(const MouseEvent& e)
 		}
 
 		root->clearDraggedComponents();
-
-		root->removeChildComponent(&parent);
-		originalParent->addChildComponent(&parent);
-		parent.setBounds(originalBounds);
-
 		Helpers::updateBounds(parent.getValueTree(), parent.getBoundsInParent(), parent.um);
-		Helpers::fixOverlap(root->data.getChildWithName(PropertyIds::Node), &root->um, false);
+		Helpers::fixOverlap(Helpers::getCurrentRoot(parent.getValueTree()), &root->um, false);
 		
 	}
 	else
 	{
 		auto bounds = parent.getBoundsInParent();
 		Helpers::updateBounds(parent.getValueTree(), bounds, parent.um);
-		Helpers::fixOverlap(root->data.getChildWithName(PropertyIds::Node), &root->um, false);
+
+		auto currentRoot = Helpers::getCurrentRoot(parent.getValueTree());
+
+		Helpers::fixOverlap(Helpers::getCurrentRoot(parent.getValueTree()), &root->um, false);
 	}
 
 	callRecursive<ContainerComponent>(root, [](ContainerComponent* c){ c->cables.setDragPosition({}, {}); return false; });
@@ -247,9 +288,21 @@ void SelectableComponent::Lasso::groupSelection()
 	if (selection.getNumSelected() == 0)
 		return;
 
-	auto sc = dynamic_cast<Component*>(selection.getSelectedItem(0).get());
+	NodeComponent* firstComponent = nullptr;
 
-	auto container = sc->findParentComponentOfClass<ContainerComponent>();
+	for(auto s: selection.getItemArray())
+	{
+		if(auto nc = dynamic_cast<NodeComponent*>(s.get()))
+		{
+			firstComponent = nc;
+			break;
+		}
+	}
+
+	if(firstComponent == nullptr)
+		return;
+
+	auto container = firstComponent->findParentComponentOfClass<ContainerComponent>();
 
 	auto groupTree = container->getValueTree().getOrCreateChildWithName(UIPropertyIds::Groups, &um);
 
@@ -281,6 +334,60 @@ void SelectableComponent::Lasso::groupSelection()
 		ng.setProperty(PropertyIds::ID, "GROUP", nullptr);
 		ng.setProperty(PropertyIds::Value, s, nullptr);
 		groupTree.addChild(ng, -1, &um);
+	}
+}
+
+void NodeComponent::HeaderComponent::BreadcrumbButton::mouseUp(const MouseEvent& e)
+{
+	auto zp = findParentComponentOfClass<ZoomableViewport>();
+	auto root = valuetree::Helpers::getRoot(data);
+	zp->setNewContent(new DspNetworkComponent(root, data), nullptr);
+}
+
+void NodeComponent::onFold(const Identifier& id, const var& newValue)
+{
+	auto folded = (bool)newValue;
+
+	parameters.clear();
+	modOutputs.clear();
+
+	
+
+	if (folded)
+	{
+		Array<ValueTree> automatedParameters;
+
+		for (auto p : getValueTree().getChildWithName(PropertyIds::Parameters))
+		{
+			if (p[PropertyIds::Automated])
+				automatedParameters.add(p);
+		}
+
+		Array<ValueTree> connectedOutputs;
+
+		valuetree::Helpers::forEach(getValueTree(), [&](const ValueTree& v)
+			{
+				if (v.getType() == PropertyIds::Connection)
+				{
+					connectedOutputs.addIfNotAlreadyThere(ParameterHelpers::findConnectionParent(v));
+				}
+
+				return false;
+			});
+
+		for (auto i : automatedParameters)
+			addAndMakeVisible(parameters.add(new FoldedInput(i, um)));
+
+		for (auto o : connectedOutputs)
+			addAndMakeVisible(modOutputs.add(new FoldedOutput(o, um)));
+
+		setFixSize({});
+	}
+	else
+	{
+		rebuildDefaultParametersAndOutputs();
+		auto boundsToUse = Helpers::getBounds(getValueTree(), false);
+		setBounds(boundsToUse);
 	}
 }
 

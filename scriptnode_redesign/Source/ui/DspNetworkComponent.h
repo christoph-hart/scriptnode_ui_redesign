@@ -37,7 +37,8 @@ namespace scriptnode {
 using namespace hise;
 using namespace juce;
 
-struct CableBase: public Component
+struct CableBase: public Component,
+				  public ChangeListener
 {
 	bool hitTest(int x, int y) override
 	{
@@ -45,7 +46,44 @@ struct CableBase: public Component
 		Point<float> tp;
 		p.getNearestPoint(sp, tp);
 
-		return sp.getDistanceFrom(tp) < 20.0f;
+		return sp.getDistanceFrom(tp) < 5.0f;
+	}
+
+	CableBase(SelectableComponent::Lasso* lassoToSync_):
+	  lassoToSync(lassoToSync_)
+	{
+		if(lassoToSync != nullptr)
+		{
+			lassoToSync->getLassoSelection().addChangeListener(this);
+		}
+	}
+
+	virtual ~CableBase()
+	{
+		if(lassoToSync.get() != nullptr)
+			lassoToSync->getLassoSelection().removeChangeListener(this);
+	}
+
+	void changeListenerCallback(ChangeBroadcaster*) override
+	{
+		jassert(lassoToSync != nullptr);
+
+		auto asSelectable = dynamic_cast<SelectableComponent*>(this);
+		jassert(asSelectable != nullptr);
+
+		auto isSelected = asSelectable->selected;
+		auto shouldBeSelected = false;
+
+		for(auto& s: lassoToSync->getLassoSelection().getItemArray())
+		{
+			if(s == asSelectable)
+				return; // job done, nothing to do
+
+			shouldBeSelected |= s != nullptr && s->getValueTree() == asSelectable->getValueTree();
+		}
+
+		if(!isSelected && shouldBeSelected)
+			lassoToSync->getLassoSelection().addToSelection(asSelectable);
 	}
 
 	void rebuildPath(Point<float> newStart, Point<float> newEnd, Component* parent)
@@ -61,10 +99,15 @@ struct CableBase: public Component
 
 		p.clear();
 		Helpers::createCustomizableCurve(p, s, e.translated(-3.0f, 0.0f), offset);
+
+		arrow.clear();
+		arrow.startNewSubPath(e);
+		arrow.lineTo(e.translated(-7.0f, 5.0f));
+		arrow.lineTo(e.translated(-7.0f, -5.0f));
+		arrow.closeSubPath();
+
 		repaint();
 	}
-
-	
 
 	void paint(Graphics& g) override
 	{
@@ -74,16 +117,14 @@ struct CableBase: public Component
 			g.setGradientFill(ColourGradient(colour1, s, colour2, e, false));
 		g.strokePath(p, PathStrokeType(over ? 3.0f : 1.0f));
 
-		Path arrow;
+		
 		g.fillEllipse(Rectangle<float>(s, s).withSizeKeepingCentre(6.0f, 6.0f));
-		arrow.startNewSubPath(e);
-		arrow.lineTo(e.translated(-7.0f, 5.0f));
-		arrow.lineTo(e.translated(-7.0f, -5.0f));
-		arrow.closeSubPath();
+		
 		g.fillPath(arrow);
 	}
 
 	Path p;
+	Path arrow;
 	bool over = false;
 	Point<float> s, e;
 
@@ -92,13 +133,14 @@ struct CableBase: public Component
 
 	Colour colour1;
 	Colour colour2;
+
+	WeakReference<SelectableComponent::Lasso> lassoToSync;
 };
 
 struct DraggedCable: public CableBase
 {
-	
-
 	DraggedCable(CablePinBase* src_):
+	  CableBase(nullptr),
 	  src(src_)
 	{
 		colour1 = Colour(SIGNAL_COLOUR);
@@ -111,21 +153,10 @@ struct DraggedCable: public CableBase
 	{
 		CableBase::paint(g);
 
-		String t;
-		
-		if(hoveredPin != nullptr)
-		{
-			t = "Connect to " + hoveredPin->getTargetParameterId();
-		}
-		else
-		{
-			t = "Create new parameter node";
-		}
-
 		auto f = GLOBAL_FONT();
-		auto w = f.getStringWidth(t) + 20.0f;
+		auto w = f.getStringWidth(label) + 20.0f;
 
-		if(t.isNotEmpty())
+		if(label.isNotEmpty() && getWidth() > w)
 		{
 			auto b = Rectangle<float>(e, e).withSizeKeepingCentre(w, 20.0f).translated(-w * 0.5 - 20.0f, 0.0f);
 
@@ -133,12 +164,15 @@ struct DraggedCable: public CableBase
 			g.fillRoundedRectangle(b, 3.0f);
 			g.setFont(f);
 			g.setColour(Colours::white.withAlpha(0.7f));
-			g.drawText(t, b, Justification::centred);
+			g.drawText(label, b, Justification::centred);
 		}
 	}
 
 	void setTargetPosition(Point<int> rootPosition);
 
+
+	String label;
+	bool ok = true;
 
 	CablePinBase::WeakPtr src;
 	CablePinBase::WeakPtr hoveredPin;
@@ -177,7 +211,7 @@ struct CableComponent : public CableBase,
 				if (holder != nullptr)
 				{
 					auto pos = holder->getLocalPoint(attachedCable, attachedCable->e.toInt());
-					pos = pos.translated(-10, -10);
+					pos = pos.translated(-20, -10);
 					setTopRightPosition(pos.getX(), pos.getY());
 				}
 			}
@@ -200,7 +234,7 @@ struct CableComponent : public CableBase,
 			if (attachedCable.getComponent() != nullptr)
 			{
 				g.setFont(GLOBAL_FONT());
-				g.setColour(Colour(0xaa222222));
+				g.setColour(Colour(0xdd222222));
 				g.fillRoundedRectangle(getLocalBounds().toFloat(), (float)getHeight() * 0.5f);
 				g.setColour(attachedCable->colour2);
 				g.drawText(currentText, getLocalBounds().toFloat().reduced(5.0f, 0.0f), Justification::right);
@@ -213,12 +247,16 @@ struct CableComponent : public CableBase,
 
 	struct CableHolder
 	{
-		CableHolder(const ValueTree& v)
+		CableHolder(const ValueTree& v):
+		  blinker(*this)
 		{
 			connectionListener.setTypesToWatch({
 			PropertyIds::Connections,
-			PropertyIds::ModulationTargets
+			PropertyIds::ModulationTargets,
+			PropertyIds::ReceiveTargets
 				});
+
+			hideConnectionListener.setCallback(v, { UIPropertyIds::HideCable }, Helpers::UIMode, VT_BIND_RECURSIVE_PROPERTY_LISTENER(onHideCable));
 
 			connectionListener.setCallback(v, Helpers::UIMode, VT_BIND_CHILD_LISTENER(onConnectionChange));
 			initialised = true;
@@ -230,8 +268,254 @@ struct CableComponent : public CableBase,
 
 		void rebuildCables();
 
+		void onHideCable(const ValueTree& v, const Identifier& id)
+		{
+			rebuildCables();
+		}
+
+		struct Stub: public SelectableComponent,
+					 public CableBase
+		{
+			enum class Attachment
+			{
+				Source,
+				Target,
+				numAttachments
+			};
+
+			Stub(CableHolder& parent_, CablePinBase* source_, CablePinBase* target_, Attachment attachment_):
+			  SelectableComponent(dynamic_cast<Lasso*>(&parent_)),
+			  CableBase(dynamic_cast<Lasso*>(&parent_)),
+			  parent(parent_),
+			  source(source_),
+			  originalTarget(target_),
+			  attachment(attachment_)
+			{
+				auto targetPath = ParameterHelpers::getParameterPath(originalTarget->data);
+
+				colour1 = ParameterHelpers::getParameterColour(source->data);
+				colour2 = Helpers::getNodeColour(valuetree::Helpers::findParentWithType(originalTarget->data, PropertyIds::Node));
+
+				setMouseCursor(MouseCursor::PointingHandCursor);
+
+				valuetree::Helpers::forEach(source->data, [&](ValueTree& v)
+				{
+					if(v.getType() == PropertyIds::Connection)
+					{
+						if(ParameterHelpers::getParameterPath(v) == targetPath)
+						{
+							connection = v;
+							return true;
+						}
+					}
+
+					return false;
+				});
+
+				auto w = GLOBAL_FONT().getStringWidth(getTextToDisplay()) + 20;
+				auto parentComponent = dynamic_cast<Component*>(&parent);
+
+				Point<float> start, end;
+
+				if(attachment == Attachment::Source)
+				{
+					auto lp = parentComponent->getLocalArea(source, source->getLocalBounds());
+					start = Point<int>(lp.getRight() - 3.0f, lp.getCentreY()).toFloat();
+					end = start.translated(50.0f, 0.0f);
+
+					while (auto existing = dynamic_cast<Stub*>(parentComponent->getComponentAt(end)))
+					{
+						end = end.translated(0, lp.getHeight());
+						offset -= 0.05f;
+					}
+				}
+				else
+				{
+
+					auto lp = parentComponent->getLocalArea(originalTarget, originalTarget->getLocalBounds());
+
+					end = Point<int>(lp.getX() - 3.0f - w, lp.getCentreY()).toFloat();
+					start = end.translated(-50.0f, 0.0f);
+				}
+
+				dynamic_cast<Component*>(&parent)->addAndMakeVisible(this);
+				toBack();
+				rebuildPath(start, end, dynamic_cast<Component*>(&parent));
+				setSize(getWidth() + w, getHeight());
+
+				auto lEnd = getLocalPoint(parentComponent, end);
+
+				textBounds = { lEnd.getX(), lEnd.getY() - 10.0f, (float)w, 20.0f };
+				
+				if(attachment == Attachment::Target)
+				{
+					s = s.translated(w-10.f, 0.0f);
+					e = e.translated(w-10.f, 0.0f);
+					textBounds = textBounds.withX(0.0f);
+					p.applyTransform(AffineTransform::translation(w - 10.0f, 0.0f));
+					arrow.applyTransform(AffineTransform::translation(w - 10.0f, 0.0f));
+				}
+			}
+
+			ValueTree getValueTree() const override
+			{
+				return connection;
+			}
+
+			const Attachment attachment;
+
+			String getTextToDisplay() const
+			{
+				if(attachment == Attachment::Source)
+				{
+					if (originalTarget != nullptr)
+					{
+						return "to " + ParameterHelpers::getParameterPath(originalTarget->data);
+					}
+				}
+				else
+				{
+					if(source != nullptr)
+					{
+						return "from " + source->getSourceDescription();
+					}
+				}
+				
+				
+				return {};
+			}
+
+			void mouseEnter(const MouseEvent& e) override
+			{
+				parent.blinker.blink(attachment == Attachment::Source ? originalTarget : source);
+			}
+
+			void mouseExit(const MouseEvent& e) override
+			{
+				parent.blinker.unblink(attachment == Attachment::Source ? originalTarget : source);
+			}
+
+			void mouseDoubleClick(const MouseEvent& event) override
+			{
+				auto ta = dynamic_cast<Component*>(&parent)->getLocalArea(originalTarget.get(), originalTarget->getLocalBounds());
+				findParentComponentOfClass<ZoomableViewport>()->scrollToRectangle(ta, true, true);
+			}
+
+			void mouseDown(const MouseEvent& e) override
+			{
+				auto l = findParentComponentOfClass<SelectableComponent::Lasso>();
+				l->getLassoSelection().addToSelectionBasedOnModifiers(this, e.mods);
+			}
+
+			bool hitTest(int x, int y) override
+			{
+				return textBounds.contains(Point<float>(x, y));
+			}
+
+			
+
+			void paint(Graphics& g) override
+			{
+				CableBase::paint(g);
+
+				auto c = attachment == Attachment::Source ? colour2 : colour1;
+
+				g.setColour(c.withAlpha(0.1f));
+				g.fillRoundedRectangle(textBounds.reduced(1.0f), 3.0f);
+
+				g.setColour(c);
+
+				if(selected)
+				{
+					g.setColour(Colour(SIGNAL_COLOUR));
+
+					Path s;
+					PathStrokeType(3.0f).createStrokedPath(s, p);
+					g.strokePath(s, PathStrokeType(1.0f));
+					g.fillPath(arrow);
+				}
+				
+				g.setFont(GLOBAL_FONT());
+				g.drawText(getTextToDisplay(), textBounds, Justification::centred);
+			}
+
+			CableHolder& parent;
+			WeakReference<CablePinBase> source;
+			WeakReference<CablePinBase> originalTarget;
+			ValueTree connection;
+
+			Rectangle<float> textBounds;
+
+		};
+
+		struct Blinker: public Timer
+		{
+			Blinker(CableHolder& p):
+			  parent(p)
+			{};
+
+			void blink(WeakReference<CablePinBase> target)
+			{
+				if (target == nullptr)
+					return;
+
+				for(auto& s: blinkTargets)
+				{
+					if(s.first == target)
+					{
+						s.second = 10;
+						startTimer(15);
+						return;
+					}
+				}
+
+				blinkTargets.add({ target, 10});
+				startTimer(15);
+			}
+
+			void unblink(CablePinBase::WeakPtr target)
+			{
+				if(target == nullptr)
+					return;
+
+				for (int i = 0; i < blinkTargets.size(); i++)
+				{
+					if (blinkTargets[i].first == target)
+						blinkTargets.remove(i--);
+				}
+
+				target->setBlinkAlpha(0.0f);
+			}
+
+			void timerCallback() override
+			{
+				for(auto& s: blinkTargets)
+				{
+					if(s.first != nullptr)
+					{
+						s.first->setBlinkAlpha((float)s.second / 10.0f);
+						--s.second;
+					}
+				}
+
+				for(int i = 0; i < blinkTargets.size(); i++)
+				{
+					if(blinkTargets[i].second == 0)
+						blinkTargets.remove(i--);
+				}
+
+				if(blinkTargets.isEmpty())
+					stopTimer();
+			}
+
+			Array<std::pair<CablePinBase::WeakPtr, int>> blinkTargets;
+
+			CableHolder& parent;
+		} blinker;
+
 		OwnedArray<CableComponent> cables;
 		OwnedArray<CableLabel> labels;
+		OwnedArray<Stub> stubs;
 		ScopedPointer<DraggedCable> currentlyDraggedCable;
 
 		void onConnectionChange(const ValueTree& v, bool wasAdded)
@@ -239,6 +523,7 @@ struct CableComponent : public CableBase,
 			rebuildCables();
 		}
 
+		valuetree::RecursivePropertyListener hideConnectionListener;
 		valuetree::RecursiveTypedChildListener connectionListener;
 	};
 
@@ -264,19 +549,13 @@ struct CableComponent : public CableBase,
 	}
 
 	CableComponent(Lasso& l, CablePinBase* src_, CablePinBase* dst_) :
-		CableBase(),
-		SelectableComponent(l),
+		CableBase(&l),
+		SelectableComponent(&l),
 		src(src_),
 		dst(dst_),
 		connectionTree(getConnectionTree(src_, dst_))
 	{
-		// TODO: Make better cable design functions (add curve points etc...)
-		// drag upwards to make the cable more rectangly
-		// drag left / right to move the center point
-		// two properties for <Connection x="0.5", y="0.5">
-
 		auto ids = UIPropertyIds::Helpers::getPositionIds();
-		ids.add(PropertyIds::Folded);
 
 		sourceListener.setCallback(src->getNodeTree(), ids, valuetree::AsyncMode::Asynchronously,
 			VT_BIND_PROPERTY_LISTENER(updatePosition));
@@ -317,6 +596,8 @@ struct CableComponent : public CableBase,
 
 	String getLabelText() const
 	{
+		return src->getSourceDescription();
+#if 0
 		String msg;
 
 		auto n = src->getNodeTree()[PropertyIds::ID].toString();
@@ -333,31 +614,23 @@ struct CableComponent : public CableBase,
 			msg << p;
 
 		return msg;
+#endif
 	}
 
 	void updatePosition(const Identifier& id, const var&)
 	{
-		if (id == PropertyIds::Folded)
-		{
-			auto sourceUnfolded = !Helpers::isFoldedRecursive(src->getNodeTree());
-			auto targetUnfolded = !Helpers::isFoldedRecursive(dst->getNodeTree());
+		auto parent = dynamic_cast<Component*>(findParentComponentOfClass<CableHolder>());
 
-			setVisible(sourceUnfolded && targetUnfolded);
-		}
-		else
-		{
-			auto parent = dynamic_cast<Component*>(findParentComponentOfClass<CableHolder>());
+		if (parent == nullptr || src == nullptr || dst == nullptr)
+			return;
 
-			if (parent == nullptr)
-				return;
+		auto start = parent->getLocalArea(src, src->getLocalBounds()).toFloat();
 
-			auto start = parent->getLocalArea(src, src->getLocalBounds()).toFloat();
-			auto ns = Point<float>(start.getRight(), start.getCentreY());
-			auto end = parent->getLocalArea(dst, dst->getLocalBounds()).toFloat();
-			auto ne = Point<float>(end.getX(), end.getCentreY());
-			
-			rebuildPath(ns, ne.translated(-1.0f * (float)Helpers::ParameterMargin, 0.0f), parent);
-		}
+		auto ns = Point<float>(start.getRight() - 3.0f, start.getCentreY());
+		auto end = parent->getLocalArea(dst, dst->getLocalBounds()).toFloat();
+		auto ne = Point<float>(end.getX(), end.getCentreY());
+
+		rebuildPath(ns, ne.translated(-1.0f * (float)Helpers::ParameterMargin, 0.0f), parent);
 	}
 
 	void paintOverChildren(Graphics& g) override
@@ -369,6 +642,7 @@ struct CableComponent : public CableBase,
 
 			g.setColour(Colour(SIGNAL_COLOUR));
 			g.strokePath(tp, PathStrokeType(1));
+			g.fillPath(arrow);
 		}
 	}
 
@@ -376,18 +650,18 @@ struct CableComponent : public CableBase,
 
 	void mouseDrag(const MouseEvent& ev) override
 	{
-		auto deltaX = (float)ev.getDistanceFromDragStartX() / (float)getWidth();
-		auto deltaY = (float)ev.getDistanceFromDragStartY() / (float)getHeight();
+		auto deltaX = (float)ev.getDistanceFromDragStartX();
+		auto deltaY = (float)ev.getDistanceFromDragStartY();
 
 		if(e.getX() < s.getX())
 		{
 			if (s.getY() > e.getY())
 				deltaY *= -1.0f;
 
-			offset = jlimit(-1.0f, 1.0f, downOffset + deltaY);
+			offset = downOffset + deltaY;
 		}
 		else
-			offset = jlimit(-0.5f, 0.5f, downOffset + deltaX);
+			offset = downOffset + deltaX;
 
 		connectionTree.setProperty(UIPropertyIds::CableOffset, offset, src->um);
 	}
@@ -434,6 +708,201 @@ struct DspNetworkComponent : public Component,
 							 public NodeComponent::Lasso,
 							 public CableComponent::CableHolder
 {
+	struct Parent: public TextEditorWithAutocompleteComponent::Parent
+	{
+		virtual ~Parent() = default;
+
+		Component*  asComponent() { return dynamic_cast<Component*>(this); }
+
+		static Parent* getParent(Component* c)
+		{
+			return c->findParentComponentOfClass<Parent>();
+		}
+
+		ZoomableViewport* getViewport()
+		{
+			ZoomableViewport* zp = nullptr;
+
+			Component::callRecursive<ZoomableViewport>(asComponent(), [&](ZoomableViewport* zp_)
+			{
+				zp = zp_;
+				return true;
+			});
+
+			return zp;
+		}
+
+		struct Map: public Component
+		{
+			struct Item
+			{
+				void draw(Graphics& g, const AffineTransform& tr)
+				{
+					auto rb = area.transformed(tr);
+
+					g.setColour(c);
+
+					g.drawRect(rb, 1);
+
+					auto tb = rb.removeFromTop(13.0f);
+
+					g.setColour(c.withAlpha(0.1f));
+					g.fillRect(tb);
+					g.setFont(GLOBAL_FONT().withHeight(10.0f));
+					g.setColour(Colours::white);
+					g.drawText(name, tb, Justification::centred);
+
+				}
+
+				Rectangle<float> area;
+				String name;
+				Colour c;
+			};
+
+			Map(const ValueTree& v, Parent& p_, Rectangle<int> viewPosition_):
+			  p(p_)
+			{
+				setMouseCursor(MouseCursor::DraggingHandCursor);
+
+				fullBounds = Helpers::getBounds(v, false).toFloat();
+				fullBounds.setWidth((int)v[UIPropertyIds::width]);
+				fullBounds.setHeight((int)v[UIPropertyIds::height]);
+				sc = AffineTransform::scale(fullBounds.getWidth(), fullBounds.getHeight(), 0.0f, 0.0f).inverted();
+
+				viewPosition = viewPosition_.toFloat().transformed(sc);
+
+				Helpers::forEachVisibleNode(v, [&](const ValueTree& n)
+				{
+					auto x = Helpers::getBoundsInRoot(n, false).toFloat();
+
+					if(n == v)
+						x = fullBounds;
+
+					x = x.translated(-fullBounds.getX(), -fullBounds.getY());
+					x = x.transformed(sc);
+
+					Item ni;
+					ni.area = x;
+					ni.name = Helpers::getHeaderTitle(n);
+					ni.c = Helpers::getNodeColour(n);
+
+					items.add(ni);
+				}, true);
+
+				auto w = 500;
+				auto h = w / fullBounds.getWidth() * fullBounds.getHeight();
+				setSize(w, h);
+
+				tr = AffineTransform::scale((float)w, (float)h, 0.0f, 0.0f);
+			}
+
+			Array<Item> items;
+
+			Rectangle<float> viewPosition;
+			Rectangle<float> downPosition;
+
+			void mouseDown(const MouseEvent& e) override
+			{
+				auto pos = e.position.transformedBy(tr.inverted());
+
+				if(!viewPosition.contains(pos))
+				{
+					auto np = viewPosition;
+					np.setCentre(pos.getX(), pos.getY());
+					updatePosition(np);
+				}
+
+				downPosition = viewPosition;
+				repaint();
+			}
+
+			void updatePosition(Rectangle<float> newPos)
+			{
+				newPos = newPos.constrainedWithin(Rectangle<float>(0.0f, 0.0f, 1.0f, 1.0f));
+
+				if(newPos != viewPosition)
+				{
+					viewPosition = newPos;
+
+					auto newArea = viewPosition.transformedBy(sc.inverted()).toNearestInt();
+					p.getViewport()->scrollToRectangle(newArea, true, false);
+
+					repaint();
+				}
+			}
+
+			void mouseDrag(const MouseEvent& e) override
+			{
+				Point<float> delta(e.getDistanceFromDragStartX(), e.getDistanceFromDragStartY());
+
+				delta = delta.transformedBy(tr.inverted());
+
+				updatePosition(downPosition.translated(delta.getX(), delta.getY()));
+			}
+
+			void paint(Graphics& g) override
+			{
+				g.fillAll(Colour(0xEE333333));
+
+				auto b = getLocalBounds().toFloat();
+				
+				g.setColour(Colours::white.withAlpha(0.2f));
+				g.fillRect(viewPosition.transformed(tr));
+
+				for(auto i: items)
+				{
+					i.draw(g, tr);
+				}
+			}
+
+			Parent& p;
+			AffineTransform tr; // NORM ->  MAP BOUNDS
+			AffineTransform sc; // NORM -> FULL BOUNDS
+			Rectangle<float> fullBounds;
+		};
+
+		void showMap(const ValueTree& v, Rectangle<int> viewPosition, Point<int> position)
+		{
+			if(map == nullptr)
+			{
+				asComponent()->addAndMakeVisible(map = new Map(v, *this, viewPosition));
+				
+				map->setCentrePosition(position);
+			}
+			else
+			{
+				map = nullptr;
+			}
+		}
+
+		StringArray getAutocompleteItems(const Identifier& id) override
+		{
+			auto list = db.getNodeIds(createSignalNodes);
+
+			if (id.isValid())
+			{
+				auto prefix = id.toString();
+
+				StringArray matches;
+				matches.ensureStorageAllocated(list.size());
+
+				for (const auto& l : list)
+				{
+					if (l.startsWith(prefix))
+						matches.add(l.fromFirstOccurrenceOf(prefix, false, false));
+				}
+
+				return matches;
+			}
+
+			return list;
+		}
+
+		bool createSignalNodes = false;
+		NodeDatabase db;
+		ScopedPointer<Map> map;
+	};
+
 	enum class Action
 	{
 		Open,
@@ -447,6 +916,7 @@ struct DspNetworkComponent : public Component,
 		ToggleVertical,
 		ToggleEdit,
 		AddComment,
+		CollapseContainer,
 		GroupSelection,
 		Undo,
 		Redo,
@@ -454,16 +924,29 @@ struct DspNetworkComponent : public Component,
 		AlignTop,
 		AlignLeft,
 		SetColour,
+		HideCable,
 		DistributeHorizontally,
 		DistributeVertically,
+		ShowMap,
 		numActions
 	};
 
-	DspNetworkComponent(const ValueTree& v_) :
-		CableHolder(v_),
-		data(v_)
+	DspNetworkComponent(const ValueTree& networkTree, const ValueTree& container) :
+		CableHolder(networkTree),
+		data(networkTree)
 	{
-		Helpers::updateChannelCount(data, false, &um);
+		calloutLAF.getCurrentColourScheme().setUIColour(LookAndFeel_V4::ColourScheme::widgetBackground, Colour(0xFF353535));
+
+		Helpers::migrateFeedbackConnections(data, true, nullptr);
+		Helpers::updateChannelCount(data, false, nullptr);
+
+		valuetree::Helpers::forEach(networkTree, [&](ValueTree& n)
+		{
+			if(n.getType() == PropertyIds::Node)
+				n.setProperty(UIPropertyIds::CurrentRoot, n == container, &um);
+
+			return false;
+		});
 
 		setWantsKeyboardFocus(true);
 
@@ -472,14 +955,14 @@ struct DspNetworkComponent : public Component,
 		lasso.setColour(LassoComponent<NodeComponent*>::ColourIds::lassoFillColourId, Colour(SIGNAL_COLOUR).withAlpha(0.05f));
 		lasso.setColour(LassoComponent<NodeComponent*>::ColourIds::lassoOutlineColourId, Colour(SIGNAL_COLOUR));
 
-		auto rootContainer = data.getChild(0);
+		auto rootContainer = container;
 		jassert(rootContainer.getType() == PropertyIds::Node);
 
 		auto sortProcessNodes = !rootContainer.hasProperty(UIPropertyIds::width);
 
 		Helpers::fixOverlap(rootContainer, &um, sortProcessNodes);
 
-		addAndMakeVisible(rootComponent = new ContainerComponent(*this, rootContainer, &um));
+		addAndMakeVisible(rootComponent = new ContainerComponent(this, rootContainer, &um));
 
 		rootSizeListener.setCallback(rootContainer,
 			{ UIPropertyIds::width, UIPropertyIds::height },
@@ -502,6 +985,13 @@ struct DspNetworkComponent : public Component,
 
 	void onFold(const ValueTree& v, const Identifier& id)
 	{
+		SafeAsyncCall::call<DspNetworkComponent>(*this, [](DspNetworkComponent& d)
+		{
+			d.rebuildCables();
+		});
+	
+		return;
+
 		for(auto c: cables)
 		{
 			auto sourceVisible = !Helpers::isFoldedRecursive(c->src->getNodeTree());
@@ -541,9 +1031,53 @@ struct DspNetworkComponent : public Component,
 			g.setColour(Colour(SIGNAL_COLOUR).withAlpha(0.1f));
 			g.fillPath(currentBuildPath);
 		}
+
+		for(const auto& p: snapshotPositions)
+		{
+			Path p1, p2, p3, p4;
+
+			auto tl = p.second.viewport.getTopLeft().toFloat();
+			auto tr = p.second.viewport.getTopRight().toFloat();
+			auto bl = p.second.viewport.getBottomLeft().toFloat();
+			auto br = p.second.viewport.getBottomRight().toFloat();
+
+			const float w = 15.0f;
+
+			p1.startNewSubPath(tl.translated(0, w));
+			p1.lineTo(tl);
+			p1.lineTo(tl.translated(w, 0.0f));
+
+			p2.startNewSubPath(tr.translated(0, w));
+			p2.lineTo(tr);
+			p2.lineTo(tr.translated(-w, 0.0f));
+
+			p3.startNewSubPath(bl.translated(0, -w));
+			p3.lineTo(bl);
+			p3.lineTo(bl.translated(w, 0.0f));
+
+			p4.startNewSubPath(br.translated(0, -w));
+			p4.lineTo(br);
+			p4.lineTo(br.translated(-w, 0.0f));
+
+			PathStrokeType ps(2.0f);
+
+			g.setColour(Colours::white.withAlpha(0.25f));
+			
+			g.strokePath(p1.createPathWithRoundedCorners(2.0f), ps);
+			g.strokePath(p2.createPathWithRoundedCorners(2.0f), ps);
+			g.strokePath(p3.createPathWithRoundedCorners(2.0f), ps);
+			g.strokePath(p4.createPathWithRoundedCorners(2.0f), ps);
+
+			g.setFont(GLOBAL_FONT());
+
+			g.drawText(String(&p.first, 1), p.second.viewport.toFloat().reduced(4.0f, 2.0f), Justification::topRight);
+			g.drawText(String(&p.first, 1), p.second.viewport.toFloat().reduced(4.0f, 2.0f), Justification::topLeft);
+			g.drawText(String(&p.first, 1), p.second.viewport.toFloat().reduced(4.0f, 2.0f), Justification::bottomLeft);
+			g.drawText(String(&p.first, 1), p.second.viewport.toFloat().reduced(4.0f, 2.0f), Justification::bottomRight);
+		}
 	}
 
-	bool createSignalNodes = true;
+	
 
 	Point<int> pos;
 
@@ -652,8 +1186,44 @@ struct DspNetworkComponent : public Component,
 			for(auto s: createTreeListFromSelection(PropertyIds::Node))
 				Helpers::setNodeProperty(s, PropertyIds::IsVertical, !Helpers::getNodeProperty(s, PropertyIds::IsVertical, true), &um);
 			return true;
+		case Action::HideCable:
+		{
+			auto treeSelection = createTreeListFromSelection(PropertyIds::Connection);
+
+			for (auto s : treeSelection)
+				s.setProperty(UIPropertyIds::HideCable, !s[UIPropertyIds::HideCable], &um);
+
+			MessageManager::callAsync([this, treeSelection]()
+			{
+				getLassoSelection().deselectAll();
+
+				callRecursive<CableComponent>(this, [&](CableComponent* c)
+				{
+					if(treeSelection.contains(c->getValueTree()))
+						getLassoSelection().addToSelection(c);
+
+					return false;
+				});
+			});
+
+			return true;
+		}
+		case Action::ShowMap:
+		{
+			auto p = Parent::getParent(this);
+			auto lp = p->asComponent()->getLocalPoint(this, pos);
+			p->showMap(rootComponent->getValueTree(), getCurrentViewPosition(), lp);
+
+			return true;
+		}
 		case Action::ToggleEdit:
 			toggleEditMode();
+			return true;
+		case Action::CollapseContainer:
+
+			for(auto c: createTreeListFromSelection(PropertyIds::Node))
+				c.setProperty(PropertyIds::Locked, !c[PropertyIds::Locked], &um);
+
 			return true;
 		case Action::CreateNew:
 		{
@@ -711,25 +1281,75 @@ struct DspNetworkComponent : public Component,
 
 					showCreateNodePopup(pos, buildPath, cd);
 				}
+				if(auto cc = dynamic_cast<CableComponent*>(first.get()))
+				{
+					auto pos = cc->getBoundsInParent().getCentre();
+
+					auto delta = cc->getPosition();
+
+					auto buildPath = cc->p;
+					buildPath.applyTransform(AffineTransform::translation(delta));
+
+					BuildHelpers::CreateData cd;
+
+					auto container = cc->src->findParentComponentOfClass<ContainerComponent>();
+
+					auto sourceBounds = Helpers::getBounds(cc->src->getNodeTree(), true);
+
+					auto newX = sourceBounds.getRight() + Helpers::NodeMargin;
+					auto newY = sourceBounds.getY();
+
+					cd.containerToInsert = container->getValueTree();
+					cd.pointInContainer = { newX, newY };
+					cd.source = cc->src;
+					cd.target = cc->dst;
+
+					showCreateNodePopup(pos, buildPath, cd);
+				}
+			}
+			else
+			{
+				showCreateConnectionPopup(pos);
 			}
 
 			return true;
 		}
 		case Action::AddComment:
 
-			for (auto s : selection.getItemArray())
+			if(selection.getNumSelected() == 0)
 			{
-				String t = "Add comment...";
-
-				if (s != nullptr && s->isNode())
+				if(auto c = rootComponent->getInnerContainer(rootComponent, pos, nullptr))
 				{
-					auto desc = db.getDescriptions()[s->getValueTree()[PropertyIds::FactoryPath]];
+					auto cTree = c->getValueTree().getOrCreateChildWithName(UIPropertyIds::Comments, &um);
 
-					if(desc.isNotEmpty())
-						t = desc;
+					auto lp = c->getLocalPoint(this, pos);
+
+					ValueTree nc(PropertyIds::Comment);
+
+					nc.setProperty(PropertyIds::Comment, "Add comment", nullptr);
+					nc.setProperty(UIPropertyIds::CommentOffsetX, lp.getX(), nullptr);
+					nc.setProperty(UIPropertyIds::CommentOffsetY, lp.getY(), nullptr);
+					nc.setProperty(UIPropertyIds::CommentWidth, 500, nullptr);
+					
+					cTree.addChild(nc, -1, &um);
 				}
-				
-				s->getValueTree().setProperty(PropertyIds::Comment, t, &um);
+			}
+			else
+			{
+				for (auto s : selection.getItemArray())
+				{
+					String t = "Add comment...";
+
+					if (s != nullptr && s->isNode())
+					{
+						auto desc = db.getDescriptions()[s->getValueTree()[PropertyIds::FactoryPath]];
+
+						if (desc.isNotEmpty())
+							t = desc;
+					}
+
+					s->getValueTree().setProperty(PropertyIds::Comment, t, &um);
+				}
 			}
 
 			return true;
@@ -740,20 +1360,50 @@ struct DspNetworkComponent : public Component,
 			um.redo();
 			return true;
 		case Action::AutoLayout:
-			for (auto s : selection.getItemArray())
+			if(selection.getNumSelected() == 0)
 			{
-				if (s != nullptr && s->isNode())
-					Helpers::resetLayout(s->getValueTree(), &um);
+				Helpers::resetLayout(rootComponent->getValueTree(), &um);
 			}
+			else
+			{
+				for (auto s : selection.getItemArray())
+				{
+					if (s != nullptr && s->isNode())
+						Helpers::resetLayout(s->getValueTree(), &um);
+				}
+			}
+
+
+			
 			return true;
 		case Action::AlignTop:
+		{
+		
 			LayoutTools::alignHorizontally(createTreeListFromSelection(PropertyIds::Node), &um);
+
+			Array<LayoutTools::CableData> cableList;
+
+			for(auto s: selection.getItemArray())
+			{
+				if(auto c = dynamic_cast<CableComponent*>(s.get()))
+				{
+					LayoutTools::CableData cd;
+					cd.con = s->getValueTree();
+					cd.s = getLocalPoint(c, c->s);
+					cd.e = getLocalPoint(c, c->e);
+					cableList.add(cd);
+				}
+			}
+
+			LayoutTools::alignCables(cableList, &um);
 			return true;
+		}
 		case Action::AlignLeft:
 			LayoutTools::alignVertically(createTreeListFromSelection(PropertyIds::Node), &um);
 			return true;
 		case Action::DistributeHorizontally:
 			LayoutTools::distributeHorizontally(createTreeListFromSelection(PropertyIds::Node), &um);
+			LayoutTools::distributeCableOffsets(createTreeListFromSelection(PropertyIds::Connection), &um);
 			return true;
 		case Action::DistributeVertically:
 			LayoutTools::distributeVertically(createTreeListFromSelection(PropertyIds::Node), &um);
@@ -763,6 +1413,16 @@ struct DspNetworkComponent : public Component,
 		default:
 			break;
 		}
+	}
+
+	Rectangle<int> getCurrentViewPosition() const
+	{
+		auto fullBounds = getLocalBounds();
+		fullBounds.removeFromTop(Helpers::HeaderHeight);
+		auto parentBounds = getParentComponent()->getLocalBounds();
+		parentBounds = getLocalArea(getParentComponent(), parentBounds);
+		auto s = parentBounds.getIntersection(fullBounds.reduced(20));
+		return s;
 	}
 
 	bool keyPressed(const KeyPress& k) override
@@ -789,10 +1449,54 @@ struct DspNetworkComponent : public Component,
 			return performAction(Action::Redo);
 		if (k.getKeyCode() == 'G' && k.getModifiers().isCommandDown())
 			return performAction(Action::GroupSelection);
+		if (k.getKeyCode() == 'L' && k.getModifiers().isCommandDown())
+			return performAction(Action::CollapseContainer);
 		if (k.getKeyCode() == KeyPress::deleteKey)
 			return performAction(Action::Delete);
 		if(k.getKeyCode() == 'N')
 			return performAction(Action::CreateNew);
+		if (k.getKeyCode() == 'M')
+			return performAction(Action::ShowMap);
+		if(k.getKeyCode() == 'H')
+			return performAction(Action::HideCable);
+
+		if(k.getKeyCode() == '1' || k.getKeyCode() == '2' || k.getKeyCode() == '3' || k.getKeyCode() == '4')
+		{
+			auto store = k.getModifiers().isCommandDown();
+
+			if(store)
+			{
+				if(snapshotPositions.find(k.getKeyCode()) != snapshotPositions.end())
+				{
+					snapshotPositions.erase(k.getKeyCode());
+					repaint();
+					return true;
+				}
+				
+				auto s = getCurrentViewPosition();
+
+				
+
+				snapshotPositions[(char)k.getKeyCode()] = { data, s.reduced(20) };
+				repaint();
+			}
+			else
+			{
+				if (snapshotPositions.find(k.getKeyCode()) != snapshotPositions.end())
+				{
+					snapshotPositions.at(k.getKeyCode()).restore(*findParentComponentOfClass<ZoomableViewport>(), &um);
+
+					//->zoomToRectangle(snapshotPositions[(char)k.getKeyCode()]);
+				}
+			}
+
+			return true;
+		}
+
+		if(k.getKeyCode() == KeyPress::leftKey || k.getKeyCode() == KeyPress::rightKey || k.getKeyCode() == KeyPress::downKey || k.getKeyCode() == KeyPress::upKey)
+		{
+			return navigateSelection(k);
+		}
 
 		return false;
 	}
@@ -838,11 +1542,176 @@ struct DspNetworkComponent : public Component,
 		});
 	}
 
+
+
+	struct CreateConnectionPopup: public Component
+	{
+		struct Item: public Component,
+					 public PathFactory
+		{
+			static constexpr int Height = 24;
+
+			Item(CablePinBase::WeakPtr src, CreateConnectionPopup& parent):
+			  source(src),
+			  name(source->getSourceDescription()),
+			  target(createPath("target")),
+			  c(ParameterHelpers::getParameterColour(src->data))
+			{
+				parent.content.addAndMakeVisible(this);
+
+				auto w = GLOBAL_BOLD_FONT().getStringWidth(name) + 20 + Height;
+
+				setBounds(0, parent.items.size() * Height, w, Height);
+				parent.items.add(this);
+				parent.content.setSize(w, parent.items.size() * Height);
+				setMouseCursor(MouseCursor::CrosshairCursor);
+				setRepaintsOnMouseActivity(true);
+			}
+
+			Path createPath(const String& url) const override
+			{
+				Path p;
+				LOAD_EPATH_IF_URL("target", ColumnIcons::targetIcon);
+				return p;
+			}
+
+			void mouseDown(const MouseEvent& e) override
+			{
+				if(source != nullptr)
+					source->mouseDown(e.getEventRelativeTo(source));
+			}
+
+			void mouseDrag(const MouseEvent& e) override
+			{
+				if (source != nullptr)
+					source->mouseDrag(e.getEventRelativeTo(source));
+			}
+
+			void mouseUp(const MouseEvent& e) override
+			{
+				if (source != nullptr)
+					source->mouseUp(e.getEventRelativeTo(source));
+
+				findParentComponentOfClass<DspNetworkComponent>()->currentCreateConnectionPopup = nullptr;
+			}
+
+			void paint(Graphics& g) override
+			{
+				auto b = getLocalBounds().toFloat();
+
+				g.setColour(Colours::black.withAlpha(0.2f));
+				g.fillRoundedRectangle(b.reduced(1.0f), 3.0f);
+
+				float alpha = 0.7f;
+
+				if(isMouseOver())
+					alpha += 0.1f;
+
+				if(isMouseOverOrDragging())
+					alpha += 0.1f;
+
+
+				g.setColour(c.withAlpha(alpha));
+				g.fillPath(target);
+				g.setFont(GLOBAL_FONT());
+				g.drawText(name, tb, Justification::left);
+			}
+
+			void resized() override
+			{
+				auto b = getLocalBounds().toFloat();
+
+				if(!b.isEmpty())
+				{
+					scalePath(target, b.removeFromRight(b.getHeight()).reduced(3.0f));
+					b.removeFromLeft(5.0f);
+					tb = b;
+					repaint();
+				}
+			}
+
+			Colour c;
+			CablePinBase::WeakPtr source;
+			Rectangle<float> tb;
+			Path target;
+			String name;
+		};
+
+		void paint(Graphics& g) override
+		{
+			auto b = getLocalBounds();
+			g.setColour(Colour(0xEE252525));
+			g.fillRoundedRectangle(b.reduced(3).toFloat(), 10.0f);
+
+			g.setColour(Colours::white.withAlpha(0.6f));
+			g.drawRoundedRectangle(b.reduced(1.0f).toFloat(), 3.0f, 2.0f);
+
+			auto tb = b.removeFromTop(Helpers::HeaderHeight).toFloat();
+			g.setFont(GLOBAL_BOLD_FONT());
+			g.setColour(Colours::white);
+			g.drawText("Create connection from source", tb, Justification::centred);
+		}
+
+		void resized() override
+		{
+			auto b = getLocalBounds();
+
+			b = b.reduced(10);
+			b.removeFromTop(Helpers::HeaderHeight);
+
+			vp.setBounds(b);
+
+			auto w = b.getWidth() - vp.getScrollBarThickness();
+
+			for(auto i: items)
+				i->setSize(w, Item::Height);
+
+			content.setSize(w, content.getHeight());
+		}
+
+		Component content;
+
+		CreateConnectionPopup(DspNetworkComponent& parent_):
+		  parent(parent_)
+		{
+			addAndMakeVisible(vp);
+
+			vp.setViewedComponent(&content, false);
+			sf.addScrollBarToAnimate(vp.getVerticalScrollBar());
+			
+			std::map<String, CablePinBase::WeakPtr> sources;
+
+			callRecursive<CablePinBase>(&parent, [&](CablePinBase* p)
+			{
+				if(p->isDraggable())
+					sources[p->getSourceDescription()] = p;
+
+				return false;
+			});
+
+			auto w = 200;
+
+			for(auto s: sources)
+			{
+				new Item(s.second, *this);
+				w = jmax(w, items.getLast()->getWidth());
+			}
+
+			setSize(w, jmin(items.size() * Item::Height, 300) + Helpers::HeaderHeight + 20);
+		}
+
+		OwnedArray<Item> items;
+		ScrollbarFader sf;
+		DspNetworkComponent& parent;
+		Viewport vp;
+	};
+
 	struct CreateNodePopup: public Component,
 							public TextEditorWithAutocompleteComponent,
 							public ZoomableViewport::ZoomListener
 	{
-		struct Laf: public GlobalHiseLookAndFeel
+		struct Laf: public GlobalHiseLookAndFeel,
+					public TextEditorWithAutocompleteComponent::LookAndFeelMethods
 		{
 			void drawButtonBackground(Graphics& g, Button& b, const Colour& backgroundColour, bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
 			{
@@ -870,6 +1739,46 @@ struct DspNetworkComponent : public Component,
 				g.setFont(GLOBAL_FONT());
 				g.drawText(button.getButtonText(), button.getLocalBounds().toFloat(), Justification::centred);
 			}
+
+			void drawAutocompleteItem(Graphics& g, TextEditorWithAutocompleteComponent& parent, const String& itemName, Rectangle<float> itemBounds, bool selected) override
+			{
+				NodeDatabase db;
+
+				if(selected)
+				{
+					g.setColour(Colours::white.withAlpha(0.05f));
+					g.fillRoundedRectangle(itemBounds.translated(-5.0f, 0.0f), 4.0f);
+				}
+
+				auto description = db.getDescriptions()[itemName];
+
+				auto bf = GLOBAL_BOLD_FONT();
+				auto f = GLOBAL_FONT();
+
+				auto factory = itemName.upToFirstOccurrenceOf(".", false, false);
+				auto nodeId = itemName.fromFirstOccurrenceOf(".", true, false);
+
+				auto fIds = db.getFactoryIds(true);
+
+				auto idx = fIds.indexOf(factory);
+
+				g.setFont(GLOBAL_BOLD_FONT());
+				g.setColour(Helpers::getFadeColour(idx, fIds.size()).withAlpha(1.0f));
+
+				g.drawText(factory, itemBounds.removeFromLeft(bf.getStringWidthFloat(factory) + 2.0f), Justification::left);
+				
+				g.setColour(Colours::white.withAlpha(0.8f));
+
+				g.drawText(nodeId, itemBounds.removeFromLeft(bf.getStringWidthFloat(nodeId) + 2.0f), Justification::left);
+				
+				g.setColour(Colours::white.withAlpha(0.5f));
+
+				itemBounds.removeFromLeft(5.0f);
+
+				g.setFont(GLOBAL_FONT());
+				g.drawText(description, itemBounds, Justification::left);
+			}
+
 		} laf;
 
 		std::map<String, String> descriptions;
@@ -882,6 +1791,8 @@ struct DspNetworkComponent : public Component,
 		  zp(parent.findParentComponentOfClass<ZoomableViewport>()),
 		  descriptions(parent.db.getDescriptions())
 		{
+			setLookAndFeel(&laf);
+
 			zp->addZoomListener(this);
 
 			addFactoryButton("All");
@@ -902,7 +1813,7 @@ struct DspNetworkComponent : public Component,
 
 			factoryButtons.getLast()->setColour(TextButton::ColourIds::buttonColourId, Helpers::getFadeColour(factoryButtons.size()-1, factoryButtons.size()));
 			
-
+			itemsToShow = 7;
 			useDynamicAutocomplete = true;
 
 			auto tl = dynamic_cast<Component*>(parent.findParentComponentOfClass<Parent>());
@@ -930,16 +1841,14 @@ struct DspNetworkComponent : public Component,
 
 			w += 10;
 
-			setSize(jmax(w, 300), h);
+			setSize(jmax(w, 500), h);
 			GlobalHiseLookAndFeel::setTextEditorColours(editor);
 			editor.setColour(TextEditor::ColourIds::highlightedTextColourId, Colours::black);
 			editor.setColour(CaretComponent::ColourIds::caretColourId, Colours::black);
 			editor.grabKeyboardFocusAsync();
 			editor.setTextToShowWhenEmpty("Type to create node", Colours::grey);
 
-			
-
-
+			factoryButtons[0]->setToggleState(true, dontSendNotification);
 
 			zp->setSuspendWASD(true);
 			//zp->scrollToRectangle(getBoundsInParent(), true);
@@ -952,6 +1861,9 @@ struct DspNetworkComponent : public Component,
 		void updatePosition()
 		{
 			auto tl = dynamic_cast<Component*>(root->findParentComponentOfClass<Parent>());
+
+
+
 			setTopLeftPosition(tl->getLocalPoint(root, originalPosition));
 		}
 
@@ -1144,7 +2056,7 @@ struct DspNetworkComponent : public Component,
 
 		currentCreateNodePopup = nullptr;
 
-		createSignalNodes = cd.signalIndex != -1;
+		Parent::getParent(this)->createSignalNodes = cd.signalIndex != -1;
 
 		currentBuildPath = buildPath;
 
@@ -1157,6 +2069,7 @@ struct DspNetworkComponent : public Component,
 	Path currentBuildPath;
 
 	ScopedPointer<CreateNodePopup> currentCreateNodePopup;
+	ScopedPointer<CreateConnectionPopup> currentCreateConnectionPopup;
 
 	ValueTree data;
 
@@ -1167,18 +2080,141 @@ struct DspNetworkComponent : public Component,
 
 	void setIsDragged(NodeComponent* nc);
 
+	static void showPopup(Component* popupComponent, Component* target)
+	{
+		auto root = target->findParentComponentOfClass<DspNetworkComponent>();
+
+		std::unique_ptr<Component> pc;
+
+		pc.reset(popupComponent);
+
+		auto b = root->getLocalArea(target, target->getLocalBounds());
+
+		auto& cb = CallOutBox::launchAsynchronously(std::move(pc), b, root);
+
+		cb.setLookAndFeel(&root->calloutLAF);
+
+		MessageManager::callAsync([root]()
+		{
+			root->rebuildCables();
+		});
+
+	}
+
 	void clearDraggedComponents();
 
 	void resetDraggedBounds();
 
 	Component::SafePointer<ContainerComponent> currentlyHoveredContainer;
 
+	static void switchRootNode(Component* c, ValueTree& newRoot)
+	{
+		if(auto vp = c->findParentComponentOfClass<ZoomableViewport>())
+		{
+			auto root = valuetree::Helpers::findParentWithType(newRoot, PropertyIds::Network);
+			auto n = new DspNetworkComponent(root,newRoot);
+			vp->setNewContent(n, nullptr);
+		}
+	}
+
 private:
 
-	Array<Component::SafePointer<NodeComponent>> currentlyDraggedComponents;
-	
+	LookAndFeel_V4 calloutLAF;
 
+	struct DraggedNode
+	{
+		void addToParent(DspNetworkComponent& root)
+		{
+			if(originalParent != nullptr && node != nullptr)
+			{
+				node->setAlpha(1.0f);
+
+				root.removeChildComponent(node);
+				originalParent->addChildComponent(node);
+				originalParent->cables.updatePins(*originalParent);
+				node->setBounds(originalBounds);
+			}
+		}
+
+		void removeFromParent(DspNetworkComponent& root)
+		{
+			if (originalParent != nullptr && node != nullptr)
+			{
+				originalBounds = node->getBoundsInParent();
+
+				root.currentlyDraggedComponents.add(*this);
+				originalParent->removeChildComponent(node);
+				root.addChildComponent(node);
+
+				originalParent->cables.updatePins(*originalParent);
+				node->setAlpha(0.5f);
+				auto rootBounds = root.getLocalArea(originalParent, originalBounds);
+				node->setBounds(rootBounds);
+			}
+		}
+
+		Rectangle<int> originalBounds;
+		Component::SafePointer<ContainerComponent> originalParent;
+		Component::SafePointer<NodeComponent> node;
+	};
+
+	Array<DraggedNode> currentlyDraggedComponents;
 	
+	struct SnapShot
+	{
+		SnapShot() = default;
+
+		SnapShot(const ValueTree& rootTree, Rectangle<int> viewport_):
+		  viewport(viewport_)
+		{
+			valuetree::Helpers::forEach(rootTree, [&](const ValueTree& n)
+			{
+				if(n.getType() == PropertyIds::Node)
+				{
+					Item ni;
+					ni.v = n;
+					ni.pos = Helpers::getBounds(n, false);
+					ni.folded = n[PropertyIds::Folded];
+					items.push_back(ni);
+				}
+
+				return false;
+			});
+		}
+
+		void restore(ZoomableViewport& zp, UndoManager* um)
+		{
+			for(auto& i: items)
+			{
+				i.v.setProperty(PropertyIds::Folded, i.folded, um);
+				Helpers::updateBounds(i.v, i.pos, um);
+			}
+
+			ZoomableViewport* z = &zp;
+			auto pos = viewport;
+
+			MessageManager::callAsync([z, pos]()
+			{
+				z->zoomToRectangle(pos.expanded(20));
+			});
+		}
+
+		struct Item
+		{
+			ValueTree v;
+			Rectangle<int> pos;
+			bool folded;
+		};
+
+		Rectangle<int> viewport;
+		std::vector<Item> items;
+	};
+
+	std::map<char, SnapShot> snapshotPositions;
+
+	JUCE_DECLARE_WEAK_REFERENCEABLE(DspNetworkComponent);
+	
+	void showCreateConnectionPopup(Point<int> pos);
 };
 
 

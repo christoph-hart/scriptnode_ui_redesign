@@ -56,19 +56,24 @@ DECLARE_ID(x);
 DECLARE_ID(y);
 DECLARE_ID(width);
 DECLARE_ID(height);
-DECLARE_ID(Locked);
+DECLARE_ID(foldedWidth);
+DECLARE_ID(foldedHeight);
+DECLARE_ID(LockPosition);
 DECLARE_ID(ParameterYOffset);
 DECLARE_ID(CommentWidth);
+DECLARE_ID(Comments);
 DECLARE_ID(CommentOffsetX);
 DECLARE_ID(CommentOffsetY);
 DECLARE_ID(CableOffset);
 DECLARE_ID(Groups);
 DECLARE_ID(Group);
+DECLARE_ID(CurrentRoot);
+DECLARE_ID(HideCable);
 #undef DECLARE_ID
 
 struct Helpers
 {
-	static Array<Identifier> getPositionIds() { return { x, y, width, height }; }
+	static Array<Identifier> getPositionIds() { return { x, y, width, height, foldedWidth, foldedHeight }; }
 };
 
 }
@@ -83,6 +88,13 @@ struct CommentHelpers
 
 struct LayoutTools
 {
+	struct CableData
+	{
+		Point<float> s;
+		Point<float> e;
+		ValueTree con;
+	};
+
 	template <char Dimension> struct Sorter
 	{
 		static int compareElements(const ValueTree& v1, const ValueTree& v2)
@@ -106,7 +118,13 @@ struct LayoutTools
 	static void distributeHorizontally(const Array<ValueTree>& list, UndoManager* um);
 
 	static void distributeInternal(const Array<ValueTree>& list, UndoManager* um, bool horizontal);
+
+	static void alignCables(const Array<CableData>& list, UndoManager* um);
+	static void distributeCableOffsets(const Array<ValueTree>& list, UndoManager* um);
+
 };
+
+
 
 struct Helpers
 {
@@ -122,10 +140,12 @@ struct Helpers
 
 	static constexpr int HeaderHeight = 24;
 	static constexpr int SignalHeight = 40;
-	static constexpr int NodeMargin = 50;
+	static constexpr int NodeMargin = 30;
 	static constexpr int ParameterHeight = 32;
-	static constexpr int ParameterWidth = 128;
+	static constexpr int ParameterWidth = 150;
 	static constexpr int ParameterMargin = 5;
+	static constexpr int ModulationOutputWidth = 80;
+	static constexpr int ModulationOutputHeight = 32;
 
 	static constexpr valuetree::AsyncMode UIMode = valuetree::AsyncMode::Asynchronously;
 
@@ -155,17 +175,24 @@ struct Helpers
 		return Colour::fromHSV(hue, saturation, brightness, alpha);
 	}
 
+	static ValueTree findParentNode(const ValueTree& v)
+	{
+		return valuetree::Helpers::findParentWithType(v, PropertyIds::Node);
+	}
+
 	static Path createPinHole();
 
-	static void createCustomizableCurve(Path& path, Point<float> start, Point<float> end, float offset)
+	static void createCustomizableCurve(Path& path, Point<float> start, Point<float> end, float offset, float roundedCorners=10.0f, bool startNewPath=true)
 	{
 		float dx = end.x - start.x;
 		float dy = end.y - start.y;
 
 		if(dx < 0.0f)
 		{
-			offset = jlimit(-1.0f, 1.0f, offset);
-			offset *= dy * 0.5;
+			//offset = jlimit(-1.0f, 1.0f, offset);
+			//offset *= dy * 0.5;
+
+			offset = jlimit(-std::abs(dy) * 0.5f, std::abs(dy) * 0.5f, offset);
 
 			auto cx1 = start.translated(15.0f, 0.0f);
 			auto cx2 = end.translated(-15.0f, 0.0f);
@@ -173,26 +200,33 @@ struct Helpers
 			auto mid1 = cx1.translated(0.0f, offset + dy * 0.5f);
 			auto mid2 = cx2.translated(0.0f, offset + dy * -0.5f);
 
-			path.startNewSubPath(start);
+			if(startNewPath)
+				path.startNewSubPath(start);
+
 			path.lineTo(cx1);
 			path.lineTo(mid1);
 			path.lineTo(mid2);
 			path.lineTo(cx2);
 			path.lineTo(end);
 
-			path = path.createPathWithRoundedCorners(10);
+			path = path.createPathWithRoundedCorners(roundedCorners);
 		}
 		else
 		{
-			offset = jlimit(-0.5f, 0.5f, offset);
-			offset *= dx;
+			//offset = jlimit(-0.5f, 0.5f, offset);
+			//offset *= dx;
+
+			offset = jlimit(-std::abs(dx) * 0.5f, std::abs(dx) * 0.5f, offset);
+
 			auto midX = start.x + dx * 0.5f + offset;
 
-			const auto ARC = jmin(std::abs(dy * 0.5f), 10.0f);
+			const auto ARC = jmin(std::abs(dy * 0.5f), roundedCorners);
 
 			float sign = end.y > start.y ? 1.0f : -1.0f;
 
-			path.startNewSubPath(start);
+			if(startNewPath)
+				path.startNewSubPath(start);
+
 			path.lineTo(midX - ARC, start.y);
 			path.quadraticTo(midX, start.y, midX, start.y + ARC * sign);
 			path.lineTo(midX, end.y - ARC * sign);
@@ -222,6 +256,20 @@ struct Helpers
 		}
 	}
 
+	static void forEachVisibleNode(const ValueTree& rootNode, const std::function<void(ValueTree)>& f, bool forceFirst)
+	{
+		if(rootNode.getType() == PropertyIds::Node)
+			f(rootNode);
+
+		auto childNodes = rootNode.getChildWithName(PropertyIds::Nodes);
+
+		if(childNodes.isValid() && (!isFoldedOrLockedContainer(rootNode) || forceFirst))
+		{
+			for(auto cn: childNodes)
+				forEachVisibleNode(cn, f, false);
+		}
+	}
+
 	static bool hasRoutableSignal(const ValueTree& v);
 
 	static bool isProcessNode(const ValueTree& v);
@@ -232,9 +280,13 @@ struct Helpers
 
 	static bool isRootNode(const ValueTree&);
 
+	static ValueTree getCurrentRoot(const ValueTree& child);
+
 	static bool shouldBeVertical(const ValueTree& container);
 
 	static bool isFoldedRecursive(const ValueTree& v);
+
+	static bool isFoldedOrLockedContainer(const ValueTree& v);
 
 	static bool isProcessingSignal(const ValueTree& v);
 
@@ -244,29 +296,17 @@ struct Helpers
 
 	static bool hasDefinedBounds(const ValueTree& v);
 
+	
+
 	static void updateBounds(ValueTree& v, Rectangle<int> newBounds, UndoManager* um);
 
-	static Colour getParameterColour(const ValueTree& p)
-	{
-		if(p.getType() == PropertyIds::Node)
-			return getNodeColour(p);
-
-		if(p.getType() == PropertyIds::ModulationTargets || p.getType() == PropertyIds::SwitchTargets)
-			return getNodeColour(valuetree::Helpers::findParentWithType(p, PropertyIds::Node));
-
-		auto c = (int64)p[PropertyIds::NodeColour];
-
-		if (c != 0)
-			return Colour((uint32)c);
-
-		return Colours::red.withHue(Random::getSystemRandom().nextFloat()).withSaturation(0.6f).withBrightness(0.7f);
-	}
+	
 
 	static bool isImmediateChildNode(const ValueTree& childNode, const ValueTree& parent);
 
 	static void fixOverlap(ValueTree v, UndoManager* um, bool sortProcessNodesFirst);
 
-	static Array<ValueTree> getAutomatedChildParameters(ValueTree container);
+	
 
 	static Colour getNodeColour(const ValueTree& v);
 
@@ -277,6 +317,8 @@ struct Helpers
 	static Point<int> getPosition(const ValueTree& v);
 
 	static Rectangle<int> getBounds(const ValueTree& v, bool includingComment);
+
+	static Rectangle<int> getBoundsInRoot(const ValueTree& v, bool includingComment);
 
 	static int getNumChannels(const ValueTree& v)
 	{
@@ -302,6 +344,8 @@ struct Helpers
 
 	static void resetLayout(ValueTree& v, UndoManager* um);
 
+	static void migrateFeedbackConnections(ValueTree& root, bool createConnections, UndoManager* um);
+
 	private:
 
 	static void resetLayoutRecursive(ValueTree& root, ValueTree& child, UndoManager* um);
@@ -310,6 +354,61 @@ struct Helpers
 
 	static void updateChannelRecursive(ValueTree& v, int numChannels, UndoManager* um);
 
+	
+
+};
+
+struct ParameterHelpers
+{
+	/** Finds the parent node that will be used for the CablePinBase class. */
+	static ValueTree findConnectionParent(const ValueTree& con)
+	{
+		jassert(con.getType() == PropertyIds::Connection);
+
+		auto p = valuetree::Helpers::findParentWithType(con, PropertyIds::Parameter);
+
+		if(p.isValid())
+			return p;
+
+		auto mt = valuetree::Helpers::findParentWithType(con, PropertyIds::ModulationTargets);
+
+		if(mt.isValid())
+			return mt;
+
+		auto rt = valuetree::Helpers::findParentWithType(con, PropertyIds::ReceiveTargets);
+
+		if(rt.isValid())
+			return mt;
+
+		auto sw = valuetree::Helpers::findParentWithType(con, PropertyIds::SwitchTarget);
+
+		if(sw.isValid())
+			return sw;
+
+		jassertfalse;
+		return ValueTree();
+	}
+
+	static bool isRoutingReceiveNode(const ValueTree& v);
+
+	static bool isRoutingSendNode(const ValueTree& v);
+
+	static bool isSoftBypassNode(const ValueTree& v);
+
+	/** Checks if the connection points to either a feedback or softbypass node. */
+	static bool isNodeConnection(const ValueTree& con);
+
+	static Colour getParameterColour(const ValueTree& p);
+
+	static Array<ValueTree> getAutomatedChildParameters(ValueTree container);
+
+	static String getParameterPath(const ValueTree& v);
+
+	/** Searches the entire network tree for a matching connection. */
+	static ValueTree getConnection(const ValueTree& p);
+
+	/** Searches the entire network tree for the matching parameter. */
+	static ValueTree getTarget(const ValueTree& con);
 };
 
 struct DataBaseHelpers
@@ -322,7 +421,7 @@ struct DataBaseHelpers
 		
 		if(auto obj = db.getProperties(p))
 		{
-			return obj->getProperty(PropertyIds::AddToSignal);
+			return !obj->getProperty(PropertyIds::OutsideSignalPath);
 		}
 
 		return false;
