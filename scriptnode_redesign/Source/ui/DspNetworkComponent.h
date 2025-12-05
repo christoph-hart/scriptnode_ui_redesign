@@ -351,18 +351,27 @@ struct CableComponent : public CableBase,
 				rebuildPath(start, end, dynamic_cast<Component*>(&parent));
 				setSize(getWidth() + w, getHeight());
 
+                // Don't add cable for targets that are not visible
+                auto sourceVisible = !source->isFoldedAway();
+                auto targetVisible = !originalTarget->isFoldedAway();
+                
 				auto lEnd = getLocalPoint(parentComponent, end);
 
 				textBounds = { lEnd.getX(), lEnd.getY() - 10.0f, (float)w, 20.0f };
 				
 				if(attachment == Attachment::Target)
 				{
+                    setVisible(targetVisible);
 					s = s.translated(w-10.f, 0.0f);
 					e = e.translated(w-10.f, 0.0f);
 					textBounds = textBounds.withX(0.0f);
 					p.applyTransform(AffineTransform::translation(w - 10.0f, 0.0f));
 					arrow.applyTransform(AffineTransform::translation(w - 10.0f, 0.0f));
 				}
+                else
+                {
+                    setVisible(sourceVisible);
+                }
 			}
 
 			ValueTree getValueTree() const override
@@ -1521,6 +1530,11 @@ struct DspNetworkComponent : public Component,
 	{
 		callRecursive<SelectableComponent>(this, [&](SelectableComponent* nc)
 		{
+            auto asComponent = dynamic_cast<Component*>(nc);
+            
+            if(!asComponent->isShowing())
+                return false;
+                
 			if(auto c = dynamic_cast<CableBase*>(nc))
 			{
 				if(!itemsFound.contains(nc))
@@ -1535,7 +1549,6 @@ struct DspNetworkComponent : public Component,
 			}
 			else
 			{
-				auto asComponent = dynamic_cast<Component*>(nc);
 				auto nb = getLocalArea(asComponent, asComponent->getLocalBounds());
 
 				if (area.intersects(nb) && !nb.contains(area))

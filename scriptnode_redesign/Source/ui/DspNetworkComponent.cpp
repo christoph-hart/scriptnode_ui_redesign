@@ -229,13 +229,10 @@ void CableComponent::CableHolder::rebuildCables()
 			// Check whether to add a cable
 			auto shouldHide = con.isValid() && con[UIPropertyIds::HideCable];
 
-			// Don't add cable for targets that are not visible
-			auto isShowing = dst->isShowing();
-
 			// Force a cable for sources that are the root of a locked container
 			auto forceCable = lockedRootSources.contains(src);
 
-			if(!forceCable && (shouldHide || !isShowing))
+			if(!forceCable && (shouldHide))
 			{
 				auto targetContainer = dst->findParentComponentOfClass<ContainerComponent>();
 
@@ -252,10 +249,9 @@ void CableComponent::CableHolder::rebuildCables()
 					}
 				}
 
-				stubs.add(new Stub(*this, src, dst, Stub::Attachment::Source));
+                stubs.add(new Stub(*this, src, dst, Stub::Attachment::Source));
 
-				if(isShowing)
-					stubs.add(new Stub(*this, src, dst, Stub::Attachment::Target));
+                stubs.add(new Stub(*this, src, dst, Stub::Attachment::Target));
 
 				it = c.second.erase(it);
 				continue;
@@ -276,12 +272,9 @@ void CableComponent::CableHolder::rebuildCables()
 
 		for (const auto& dst : c.second)
 		{
-			
+			if(src->isFoldedAway() || dst->isFoldedAway())
+                continue;
 
-			
-
-			
-			
 			auto asLasso = dynamic_cast<SelectableComponent::Lasso*>(this);
 
 			auto nc = new CableComponent(*asLasso, src, dst);

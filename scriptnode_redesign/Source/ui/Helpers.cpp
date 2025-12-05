@@ -1009,7 +1009,12 @@ void LayoutTools::distributeInternal(const Array<ValueTree>& list, UndoManager* 
 	{
 		auto pos = Helpers::getPosition(l);
 		l.setProperty(horizontal ? UIPropertyIds::x : UIPropertyIds::y, p, um);
-		p += (int)l[horizontal ? UIPropertyIds::width : UIPropertyIds::height];
+        
+        if(Helpers::isFoldedOrLockedContainer(l))
+            p += (int)l[horizontal ? UIPropertyIds::foldedWidth : UIPropertyIds::foldedHeight];
+        else
+            p += (int)l[horizontal ? UIPropertyIds::width : UIPropertyIds::height];
+        
 		p += gapSize;
 	}
 }

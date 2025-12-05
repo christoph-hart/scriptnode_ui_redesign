@@ -116,6 +116,11 @@ struct CablePinBase : public Component,
         return Helpers::findParentNode(data);
     }
 
+    bool isFoldedAway() const
+    {
+        return Helpers::isFoldedRecursive(getNodeTree().getParent().getParent());
+    }
+    
     /** Override this method and check if the value tree for the given connection
         matches this component as source. */
     virtual bool matchConnection(const ValueTree& possibleConnection) const
