@@ -172,12 +172,14 @@ void CablePinBase::mouseDown(const MouseEvent& e)
 
 void CablePinBase::mouseDrag(const MouseEvent& e)
 {
+	ZoomableViewport::checkDragScroll(e, false);
+
 	if (e.mods.isRightButtonDown())
 		return;
 
 	if (draggingEnabled)
 	{
-		ZoomableViewport::checkDragScroll(e, false);
+		
 
 		auto root = findParentComponentOfClass<DspNetworkComponent>();
 
@@ -188,14 +190,17 @@ void CablePinBase::mouseDrag(const MouseEvent& e)
 
 void CablePinBase::mouseUp(const MouseEvent& e)
 {
-	if(e.mods.isRightButtonDown())
-		return;
+	ZoomableViewport::checkDragScroll(e, true);
+
 
 	if (draggingEnabled)
 	{
-		ZoomableViewport::checkDragScroll(e, true);
+		
 
 		auto root = findParentComponentOfClass<DspNetworkComponent>();
+
+		if(root->currentlyDraggedCable == nullptr)
+			return;
 
 		if(auto dst = root->currentlyDraggedCable->hoveredPin)
 		{
@@ -1118,6 +1123,8 @@ struct ParameterComponent::RangeComponent : public ComponentWithMiddleMouseDrag,
 
 void ParameterComponent::mouseDown(const MouseEvent& e)
 {
+	CablePinBase::mouseDown(e);
+
 	if (e.mods.isRightButtonDown())
 	{
 		auto nc = new RangeComponent(false, *this);

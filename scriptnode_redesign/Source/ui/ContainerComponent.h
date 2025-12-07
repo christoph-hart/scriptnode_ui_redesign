@@ -83,6 +83,7 @@ struct ContainerComponent : public NodeComponent,
 		using MultiChannelConnection = std::vector<Connection>;
 
 		Path pin;
+		int activeBranch = -1;
 
 		CableSetup(ContainerComponent& parent_, const ValueTree& v) :
 			parent(parent_)
@@ -90,11 +91,34 @@ struct ContainerComponent : public NodeComponent,
 			pin = Helpers::createPinHole();
 			init(v);
 
+			if(type == ContainerType::Branch)
+				branchListener.setCallback(v.getChildWithName(PropertyIds::Parameters).getChild(0), { PropertyIds::Value }, Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onBranch));
 		}
+
+		valuetree::PropertyListener branchListener;
 
 		bool isSerialType() const {
 			return type == ContainerType::Serial || type == ContainerType::ModChain;
 
+		}
+
+		void onBranch(const Identifier&, const var& newValue)
+		{
+			activeBranch = (int)newValue;
+
+			connections.clear();
+
+			for (int i = 0; i < numNodes; i++)
+			{
+				MultiChannelConnection mc;
+
+				for (int c = 0; c < numChannels; c++)
+					mc.push_back({ c, c, i == activeBranch });
+
+				connections.push_back(mc);
+			}
+
+			updatePins(parent);
 		}
 
 		void updatePins(ContainerComponent& p);
@@ -141,16 +165,6 @@ struct ContainerComponent : public NodeComponent,
 			else if (n == "branch")
 			{
 				type = ContainerType::Branch;
-
-				for (int i = 0; i < numNodes; i++)
-				{
-					MultiChannelConnection mc;
-
-					for (int c = 0; c < numChannels; c++)
-						mc.push_back({ c, c, i == 1 });
-
-					connections.push_back(mc);
-				}
 			}
 			else if (n == "modchain")
 			{
@@ -197,6 +211,7 @@ struct ContainerComponent : public NodeComponent,
 			int numChannels;
 			float cableOffset;
 			int lod;
+			bool active = true;
 
 			void setCoordinates(Point<float> p1_, Point<float> p2_, float cableOffset_, int channelIndex_)
 			{
@@ -256,7 +271,7 @@ struct ContainerComponent : public NodeComponent,
 
 				auto strokeDepth = LayoutTools::getCableThickness(lod);
 
-				if(lod == 0)
+				if(lod == 0 && active)
 				{
 
 					g.setColour(Colours::black.withAlpha(0.7f));
@@ -266,7 +281,7 @@ struct ContainerComponent : public NodeComponent,
 					sp = PathStrokeType::rounded;
 				}
 				
-				g.setColour(c);
+				g.setColour(active ? c : c.withAlpha(0.2f));
 				g.strokePath(p, PathStrokeType(strokeDepth, PathStrokeType::beveled, sp));
 			}
 		};
@@ -336,6 +351,8 @@ struct ContainerComponent : public NodeComponent,
 			cd.lod = LODManager::getLOD(parent);
 			cd.numChannels = numChannels;
 			cd.c = colour;
+
+			pinPositions.containerStart.setX(cd.lod == 0 ? Helpers::ParameterMargin + Helpers::ParameterWidth - 25.0f : 0);
 
 			auto xOffset = 10.0f;
 
@@ -474,6 +491,7 @@ struct ContainerComponent : public NodeComponent,
 
 						cd.channelIndex = cIndex;
 						cd.cableOffset = 0.0f;
+						cd.active = cc.active;
 
 						cd.p1 = p1;
 						cd.p2 = p2;
@@ -856,7 +874,7 @@ struct ContainerComponent : public NodeComponent,
 		auto conParent = ParameterHelpers::findConnectionParent(source);
 
 		if (conParent.getType() == PropertyIds::Parameter)
-			return new ParameterComponent(conParent, asNodeComponent().getUndoManager());
+			return new ParameterComponent(getUpdater(), conParent, asNodeComponent().getUndoManager());
 		else
 			return new ModulationBridge(conParent, asNodeComponent().getUndoManager());
 	}

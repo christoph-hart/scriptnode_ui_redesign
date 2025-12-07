@@ -54,12 +54,30 @@ TODO:
 - implement LOD system for better rendering with big patches OK
 - fix selection with folded containers OK
 - add parameter popup with sliders ("P") OK
+- add C++ project nodes
+- clone nodes
+
+
+ROADMAP:
+
+- extra components OK
+- clone nodes
+- containers with fixed parameters (not draggable, no add possible)
+- external data
+- add visualisation for modulated parameters (use a query lambda)
 
 BUGS:
 
-- fix alignment & distribution with folded containers
+- fix alignment & distribution with folded / locked containers
 - fix cables being displayed for folded containers
 - fix reset mixing up process node positions despite lock
+- fix crash when dragging parameter cables
+- fix descriptions not appearing anymore
+- fix cable nodes not appearing
+- fix HideCable being reset when going into locked container
+- fix autocomplete appearing within visible area
+- update start / end pin connections at LOD change
+- fix combobox / toggle button appearing at locked targets
 
 FEATURES:
 
@@ -68,7 +86,7 @@ FEATURES:
 - add double click on connection to goto source / target
 - add context menu with actions
 - add dynamic process signal flag with path stuff for extra_mods (all nodes that have a ProcessSignal / AddToSignal parameter)
-
+- add view undomanager with back buttons
 
 */
 
@@ -120,6 +138,8 @@ private:
     mcl::TextEditor viewer;
 
     ValueTree currentTree;
+
+    PooledUIUpdater updater;
 
     hise::HiseShapeButton openButton;
 

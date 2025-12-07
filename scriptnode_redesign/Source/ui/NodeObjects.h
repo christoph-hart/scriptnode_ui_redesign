@@ -75,9 +75,9 @@ struct ProcessNodeComponent : public NodeComponent
 		{
 			g.setColour(Colours::grey);
 
-			auto lod = LODManager::getLOD(*this);
+			LODManager::LODGraphics lg(g, *this);
 
-			if(lod == 0)
+			if(lg.drawFullDetails())
 			{
 				for (auto& s : screws)
 					g.fillPath(s);
@@ -86,7 +86,7 @@ struct ProcessNodeComponent : public NodeComponent
 			if(!canBeTarget())
 			{
 				g.setColour(Colours::white.withAlpha(isMouseOver() ? 0.7f : 0.5f));
-				LayoutTools::fillPathOrEllipse(g, lod, targetIcon);
+				lg.fillPath(targetIcon);
 			}
 				
 			g.setColour(Colours::white.withAlpha(0.3f));
@@ -95,7 +95,7 @@ struct ProcessNodeComponent : public NodeComponent
 
 			g.setFont(GLOBAL_FONT());
 
-			LayoutTools::drawTextWithLOD(g, lod, getSourceDescription().fromFirstOccurrenceOf(".", false, false), getLocalBounds().reduced(10, 0).toFloat(), j);
+			lg.drawText(getSourceDescription().fromFirstOccurrenceOf(".", false, false), getLocalBounds().reduced(10, 0).toFloat(), j);
 		}
 
 		String getSourceDescription() const override
@@ -172,16 +172,19 @@ struct ProcessNodeComponent : public NodeComponent
 
 		setOpaque(true);
 
-		dummyBody = DummyBody::createDummyComponent(v[PropertyIds::FactoryPath].toString());
+		extraBody = createBodyComponent();
+
+		if(extraBody == nullptr)
+			extraBody = DummyBody::createDummyComponent(v[PropertyIds::FactoryPath].toString());
 
 		if(routableSignal != nullptr)
 		{
 			setFixSize({});
 		}
-		else if (dummyBody != nullptr)
+		else if (extraBody != nullptr)
 		{
-			addAndMakeVisible(dummyBody);
-			setFixSize(dummyBody->getLocalBounds());
+			addAndMakeVisible(extraBody);
+			setFixSize(extraBody->getLocalBounds().expanded(10));
 		}
 		else
 			setFixSize({});
@@ -276,8 +279,8 @@ struct ProcessNodeComponent : public NodeComponent
 
 	void onFold(const Identifier& id, const var& newValue) override
 	{
-		if (dummyBody != nullptr)
-			dummyBody->setVisible(!(bool)newValue);
+		if (extraBody != nullptr)
+			extraBody->setVisible(!(bool)newValue);
 
 		NodeComponent::onFold(id, newValue);
 	}
@@ -299,12 +302,12 @@ struct ProcessNodeComponent : public NodeComponent
 			deltaY += Helpers::SignalHeight;
 		}
 
-		if (dummyBody != nullptr && dummyBody->isVisible())
+		if (extraBody != nullptr && extraBody->isVisible())
 		{
-			dummyBody->setTopLeftPosition(b.getTopLeft());
+			extraBody->setTopLeftPosition(b.getTopLeft().translated(10, 10));
 
-			b.removeFromTop(dummyBody->getHeight());
-			deltaY += dummyBody->getHeight();
+			b.removeFromTop(extraBody->getHeight() + 20);
+			deltaY += extraBody->getHeight() + 20;
 		}
 
 		for (auto p : parameters)
@@ -345,7 +348,7 @@ struct ProcessNodeComponent : public NodeComponent
 	std::vector<std::pair<Path, Path>> cables;
 	
 	ScopedPointer<RoutableSignalComponent> routableSignal;
-	ScopedPointer<Component> dummyBody;
+	ScopedPointer<Component> extraBody;
 	int numChannels = 2;
 };
 
@@ -405,12 +408,15 @@ struct NoProcessNodeComponent : public NodeComponent
 	{
 		setOpaque(true);
 
-		dummyBody = DummyBody::createDummyComponent(v[PropertyIds::FactoryPath].toString());
+		extraBody = createBodyComponent();
 
-		if (dummyBody != nullptr)
+		if(extraBody == nullptr)
+			extraBody = DummyBody::createDummyComponent(v[PropertyIds::FactoryPath].toString());
+
+		if (extraBody != nullptr)
 		{
-			addAndMakeVisible(dummyBody);
-			setFixSize(dummyBody->getLocalBounds());
+			addAndMakeVisible(extraBody);
+			setFixSize(extraBody->getLocalBounds().expanded(10));
 		}
 		else
 			setFixSize({});
@@ -439,8 +445,8 @@ struct NoProcessNodeComponent : public NodeComponent
 
 	void onFold(const Identifier& id, const var& newValue) override
 	{
-		if (dummyBody != nullptr)
-			dummyBody->setVisible(!(bool)newValue);
+		if (extraBody != nullptr)
+			extraBody->setVisible(!(bool)newValue);
 
 		NodeComponent::onFold(id, newValue);
 	}
@@ -449,7 +455,7 @@ struct NoProcessNodeComponent : public NodeComponent
 	{
 		NodeComponent::resized();
 
-		if (dummyBody != nullptr && dummyBody->isVisible())
+		if (extraBody != nullptr && extraBody->isVisible())
 		{
 			auto b = getLocalBounds();
 
@@ -458,24 +464,24 @@ struct NoProcessNodeComponent : public NodeComponent
 			if (hasSignal)
 				b.removeFromTop(Helpers::SignalHeight);
 
-			dummyBody->setTopLeftPosition(b.getTopLeft());
+			extraBody->setTopLeftPosition(b.getTopLeft().translated(10, 10));
 
-			b.removeFromTop(dummyBody->getHeight());
+			b.removeFromTop(extraBody->getHeight());
 
 			for (auto p : parameters)
 			{
-				p->setTopLeftPosition(p->getPosition().translated(0, dummyBody->getHeight()));
+				p->setTopLeftPosition(p->getPosition().translated(0, extraBody->getHeight() + 20));
 			}
 
 			for (auto m : modOutputs)
 			{
-				m->setTopLeftPosition(m->getPosition().translated(0, dummyBody->getHeight()));
+				m->setTopLeftPosition(m->getPosition().translated(0, extraBody->getHeight() + 20));
 			}
 
 		}
 	}
 
-	ScopedPointer<Component> dummyBody;
+	ScopedPointer<Component> extraBody;
 };
 
 }

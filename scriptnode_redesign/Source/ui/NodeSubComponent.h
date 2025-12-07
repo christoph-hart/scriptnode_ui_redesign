@@ -192,7 +192,8 @@ protected:
 };
 
 struct ParameterComponent : public CablePinBase,
-							public Slider::Listener
+							public Slider::Listener,
+							public PooledUIUpdater::SimpleTimer
 {
 	struct Laf: public GlobalHiseLookAndFeel
 	{
@@ -293,8 +294,9 @@ struct ParameterComponent : public CablePinBase,
 
 	struct RangeComponent;
 
-	ParameterComponent(ValueTree v, UndoManager* um_) :
+	ParameterComponent(PooledUIUpdater* updater, ValueTree v, UndoManager* um_) :
 		CablePinBase(v, um_),
+		SimpleTimer(updater, false),
 		dropDown("")
 	{
 		jassert(v.getType() == PropertyIds::Parameter);
@@ -314,11 +316,15 @@ struct ParameterComponent : public CablePinBase,
 		slider.setColour(Slider::textBoxOutlineColourId, Colours::transparentBlack);
 		slider.setScrollWheelEnabled(false);
 
-		slider.getValueObject().referTo(v.getPropertyAsValue(PropertyIds::Value, um, false));
+		
 
 		slider.addListener(this);
 
 		rangeUpdater.setCallback(data, RangeHelpers::getRangeIds(), Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onRange));
+		
+
+		automationUpdater.setCallback(data, { PropertyIds::Automated }, Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onAutomated));
+		onAutomated({}, data[PropertyIds::Automated]);
 
 		auto vtc = ValueToTextConverter::fromString(v[PropertyIds::TextToValueConverter].toString());
 
@@ -358,12 +364,21 @@ struct ParameterComponent : public CablePinBase,
 
 					auto value = (int)this->data[PropertyIds::Value];
 
+					bool automated = false;
+
+					if(this->data[PropertyIds::Automated])
+					{
+						automated = true;
+						value = (int)this->lastValue;
+					}
+						
+
 					for (int i = 0; i < vtc.itemList.size(); i++)
 					{
 						auto s = vtc.itemList[i];
 						s << " (" << String(i) << ')';
 
-						m.addItem(1 + i, s, true, i == value);
+						m.addItem(1 + i, s, !automated, i == value);
 					}
 
 					auto r = m.showAt(&dropDown);
@@ -386,7 +401,11 @@ struct ParameterComponent : public CablePinBase,
 
 		if(Helpers::isContainerNode(parentNode) && !Helpers::isFoldedOrLockedContainer(parentNode))
 		{
-			setEnableDragging(true);
+			NodeDatabase db;
+			
+			auto hasFixed = db.getProperties(parentNode[PropertyIds::FactoryPath])->hasProperty(PropertyIds::HasFixedParameters);
+
+			setEnableDragging(!hasFixed);
 
 			if (!v.hasProperty(PropertyIds::NodeColour))
 			{
@@ -401,22 +420,60 @@ struct ParameterComponent : public CablePinBase,
 		repaint();
 	}
 
+	double lastValue = 0;
+
+	void timerCallback() override
+	{
+		if(auto pc = findParentComponentOfClass<scriptnode::NodeComponentParameterSource>())
+		{
+			auto idx = data.getParent().indexOf(data);
+			auto nv = pc->getParameterValue(idx);
+
+			if(lastValue != nv)
+			{
+				lastValue = nv;
+				slider.setValue(lastValue, dontSendNotification);
+
+				if(dropDown.isToggleable())
+					dropDown.setToggleState(lastValue > 0.5, dontSendNotification);
+
+				repaint();
+			}
+		}
+	}
+
+	void onAutomated(const Identifier& id, const var& newValue)
+	{
+		if((bool)newValue)
+		{
+			start();
+			slider.setEnabled(false);
+			slider.getValueObject().referTo({});
+		}
+		else
+		{
+			stop();
+			slider.setEnabled(true);
+			slider.getValueObject().referTo(data.getPropertyAsValue(PropertyIds::Value, um, false));
+		}
+	}
+
 	bool isOutsideParameter() const;
 
 	void paint(Graphics& g) override
 	{
-		auto lod = LODManager::getLOD(*this);
+		LODManager::LODGraphics lg(g, *this);
 
 		if (draggingEnabled)
 		{
 			g.setColour(ParameterHelpers::getParameterColour(data));
 
-			LayoutTools::fillRoundedRectangle(g, lod, getLocalBounds().toFloat().reduced(3.0f, 0.0f).removeFromRight(4.0f), 2.0f);
+			lg.fillRoundedRectangle(getLocalBounds().toFloat().reduced(3.0f, 0.0f).removeFromRight(4.0f), 2.0f);
 
 			g.setColour(Colours::white.withAlpha(0.5f));
 			auto pb = getLocalBounds().removeFromRight(getHeight()).toFloat().reduced(10.0f);
 			scalePath(targetIcon, pb);
-			LayoutTools::fillPathOrEllipse(g, lod, targetIcon);
+			lg.fillPath(targetIcon);
 		}
 
 		drawBlinkState(g);
@@ -453,20 +510,20 @@ struct ParameterComponent : public CablePinBase,
 
 			g.setColour(Colours::white.withAlpha(0.5f));
 
-			LayoutTools::drawTextWithLOD(g, lod, rootId, nb.reduced(3.0f, 0.0f), Justification::left);
+			lg.drawText(rootId, nb.reduced(3.0f, 0.0f), Justification::left);
 		}
 		else
 		{
 			g.setFont(GLOBAL_FONT());
 			g.setColour(Colours::white.withAlpha(0.6f));
 
-			LayoutTools::drawTextWithLOD(g, lod, slider.getTextFromValue(slider.getValue()), tb.reduced(0.0f, 2.0f), Justification::bottomLeft);
+			lg.drawText(slider.getTextFromValue(slider.getValue()), tb.reduced(0.0f, 2.0f), Justification::bottomLeft);
 		}
 		
 		g.setFont(GLOBAL_BOLD_FONT());
 		g.setColour(Colours::white.withAlpha(0.8f));
 		
-		LayoutTools::drawTextWithLOD(g, lod, name, tb.reduced(0.0f, 2.0f), Justification::topLeft);
+		lg.drawText(name, tb.reduced(0.0f, 2.0f), Justification::topLeft);
 	}
 
 	Helpers::ConnectionType getConnectionType() const override { return Helpers::ConnectionType::Parameter; };
@@ -522,6 +579,7 @@ struct ParameterComponent : public CablePinBase,
 	juce::Slider slider;
 
 	valuetree::PropertyListener rangeUpdater;
+	valuetree::PropertyListener automationUpdater;
 
 	TextButton dropDown;
 };
@@ -555,8 +613,8 @@ struct LockedTarget: public CablePinBase
 		g.setColour(Colours::white.withAlpha(0.5f));
 		g.setFont(GLOBAL_FONT());
 		
-		auto lod = LODManager::getLOD(*this);
-		LayoutTools::drawTextWithLOD(g, lod, getSourceDescription(), getLocalBounds().toFloat().reduced(5.0f, 0.0f), Justification::left);
+		LODManager::LODGraphics lg(g, *this);
+		lg.drawText(getSourceDescription(), getLocalBounds().toFloat().reduced(5.0f, 0.0f), Justification::left);
 	}
 
 	ValueTree getConnectionTree() const override
@@ -610,18 +668,18 @@ struct ModulationBridge: public CablePinBase
 
 		auto c = Helpers::getNodeColour(sourceNode);
 
-		auto lod = LODManager::getLOD(*this);
+		LODManager::LODGraphics lg(g, *this);
 
 		g.setColour(c);
 
-		LayoutTools::fillRoundedRectangle(g, lod, getLocalBounds().toFloat().reduced(3.0f, 0.0f).removeFromRight(4.0f), 2.0f);
+		lg.fillRoundedRectangle(getLocalBounds().toFloat().reduced(3.0f, 0.0f).removeFromRight(4.0f), 2.0f);
 
 		auto b = getLocalBounds().toFloat();
 		auto tb = b.removeFromRight(getHeight()).toFloat();
 
 		scalePath(targetIcon, tb.reduced(10.0f));
 
-		LayoutTools::fillPathOrEllipse(g, lod, targetIcon);
+		lg.fillPath(targetIcon);
 
 		auto rb = b.reduced(0, 5);
 
@@ -635,7 +693,7 @@ struct ModulationBridge: public CablePinBase
 		String label = "from " + getSourceDescription();
 		b.removeFromLeft(5);
 
-		LayoutTools::drawTextWithLOD(g, lod, label, b, Justification::left);
+		lg.drawText(label, b, Justification::left);
 	}
 
 	bool canBeTarget() const override { return true; }
@@ -696,7 +754,7 @@ struct ModOutputComponent : public CablePinBase
 		g.setColour(Colours::white.withAlpha(isMouseOver() ? 0.8f : 0.5f));
 		g.setFont(GLOBAL_BOLD_FONT());
 
-		auto lod = LODManager::getLOD(*this);
+		LODManager::LODGraphics lg(g, *this);
 
 		drawBlinkState(g);
 
@@ -705,8 +763,8 @@ struct ModOutputComponent : public CablePinBase
 
 		scalePath(targetIcon, tb.reduced(8.0f));
 
-		LayoutTools::fillPathOrEllipse(g, lod, targetIcon);
-		LayoutTools::drawTextWithLOD(g, lod, getSourceDescription().fromFirstOccurrenceOf(".", false, false), b, Justification::right);
+		lg.fillPath(targetIcon);
+		lg.drawText(getSourceDescription().fromFirstOccurrenceOf(".", false, false), b, Justification::right);
 	}
 
 	ValueTree getConnectionTree() const override
@@ -721,8 +779,8 @@ struct ModOutputComponent : public CablePinBase
 
 struct FoldedInput: public ParameterComponent
 {
-	FoldedInput(const ValueTree& v, UndoManager* um):
-	  ParameterComponent(v, um)
+	FoldedInput(PooledUIUpdater* updater, const ValueTree& v, UndoManager* um):
+	  ParameterComponent(updater, v, um)
 	{
 		setSize(Helpers::ParameterWidth, Helpers::ParameterHeight);
 		slider.setVisible(false);

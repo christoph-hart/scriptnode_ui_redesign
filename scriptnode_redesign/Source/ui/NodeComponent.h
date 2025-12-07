@@ -52,9 +52,11 @@ struct SelectableComponent: public ChangeListener
 
 	struct Lasso : public juce::LassoSource<WeakPtr>,
 				   public Timer,
-				   public ChangeListener
+				   public ChangeListener,
+				   public DummyComplexDataProvider
 	{
-		Lasso()
+		Lasso(PooledUIUpdater* updater_):
+		  updater(updater_)
 		{
 			startTimer(500);
 			selection.addChangeListener(this);
@@ -399,11 +401,17 @@ struct SelectableComponent: public ChangeListener
 			}
 		}
 
+		PooledUIUpdater* getUpdater() { return updater; }
+
 		UndoManager um;
 		juce::LassoComponent<SelectableComponent::WeakPtr> lasso;
 		Selection selection;
 
 		scriptnode::NodeDatabase db;
+
+	private:
+
+		PooledUIUpdater* updater;
 
 		JUCE_DECLARE_WEAK_REFERENCEABLE(Lasso);
 	};
@@ -450,7 +458,8 @@ struct SelectableComponent: public ChangeListener
 
 struct NodeComponent : public Component,
 	public SelectableComponent,
-	public PathFactory
+	public PathFactory,
+	public simple_visualiser::ParameterSource
 {
 	struct HeaderComponent : public CablePinBase,
 							 public ComponentBoundsConstrainer
@@ -649,8 +658,8 @@ struct NodeComponent : public Component,
 			for(auto bc: breadcrumbs)
 				b.removeFromLeft(bc->getWidth());
 
-			auto lod = LODManager::getLOD(*this);
-			LayoutTools::drawTextWithLOD(g, lod, Helpers::getHeaderTitle(parent.getValueTree()), b, Justification::left);
+			LODManager::LODGraphics lg(g, *this);
+			lg.drawText(Helpers::getHeaderTitle(parent.getValueTree()), b, Justification::left);
 		}
 
 		struct BreadcrumbButton: public Component
@@ -736,18 +745,22 @@ struct NodeComponent : public Component,
 
 	struct PopupComponent: public Component
 	{
-		PopupComponent(const ValueTree& v, UndoManager* um_):
-		  data(v),
-		  um(um_)
+		PopupComponent(NodeComponent& nc):
+		  data(nc.getValueTree()),
+		  um(nc.um)
 		{
-			dummyBody = DummyBody::createDummyComponent(v[PropertyIds::FactoryPath].toString());
+			setColour(complex_ui_laf::NodeColourId, Helpers::getNodeColour(data));
+			extraBody = nc.createBodyComponent();
 
-			if(dummyBody != nullptr)
-				addAndMakeVisible(dummyBody);
+			if(extraBody == nullptr)
+				extraBody = DummyBody::createDummyComponent(data[PropertyIds::FactoryPath].toString());
+
+			if(extraBody != nullptr)
+				addAndMakeVisible(extraBody);
 
 			for (auto p : data.getChildWithName(PropertyIds::Parameters))
 			{
-				addAndMakeVisible(parameters.add(new ParameterComponent(p, um)));
+				addAndMakeVisible(parameters.add(new ParameterComponent(nc.getUpdater(), p, um)));
 			}
 
 			auto modOutput = data.getChildWithName(PropertyIds::ModulationTargets);
@@ -770,10 +783,10 @@ struct NodeComponent : public Component,
 
 			h = jmax(h, modOutputs.size() * (Helpers::ModulationOutputHeight + Helpers::ParameterMargin));
 
-			if(dummyBody != nullptr)
+			if(extraBody != nullptr)
 			{
-				w = jmax(dummyBody->getWidth(), w);
-				h += dummyBody->getHeight();
+				w = jmax(extraBody->getWidth(), w);
+				h += extraBody->getHeight();
 			}
 
 			setSize(w, h);
@@ -789,11 +802,11 @@ struct NodeComponent : public Component,
 		{
 			auto b = getLocalBounds();
 
-			if(dummyBody != nullptr)
+			if(extraBody != nullptr)
 			{
-				auto db = b.removeFromTop(dummyBody->getHeight());
-				db = db.withSizeKeepingCentre(dummyBody->getWidth(), dummyBody->getHeight());
-				dummyBody->setBounds(db);
+				auto db = b.removeFromTop(extraBody->getHeight());
+				db = db.withSizeKeepingCentre(extraBody->getWidth(), extraBody->getHeight());
+				extraBody->setBounds(db);
 			}
 
 			if(!parameters.isEmpty())
@@ -824,7 +837,7 @@ struct NodeComponent : public Component,
 		UndoManager* um;
 		OwnedArray<ParameterComponent> parameters;
 		OwnedArray<ModOutputComponent> modOutputs;
-		ScopedPointer<Component> dummyBody;
+		ScopedPointer<Component> extraBody;
 	};
 
 	void toggle(const Identifier& id)
@@ -859,16 +872,61 @@ struct NodeComponent : public Component,
 		rebuildDefaultParametersAndOutputs();
 
 		colourListener.setCallback(data, { PropertyIds::NodeColour }, Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onColour));
-
-		
 	};
+
+	Component* createBodyComponent()
+	{
+		if(lasso != nullptr)
+		{
+			UIFactory f;
+
+			if(auto b = f.createExtraComponent(getValueTree(), um, nullptr, getUpdater()))
+				return b;
+
+			auto cdTree = getValueTree().getChildWithName(PropertyIds::ComplexData);
+
+			if (cdTree.isValid())
+			{
+				ReferenceCountedArray<ComplexDataUIBase> objects;
+
+				ExternalData::forEachType([&](ExternalData::DataType dt)
+				{
+					auto id = ExternalData::getDataTypeName(dt, true);
+					auto dTree = cdTree.getChildWithName(id);
+
+					for (auto data : dTree)
+					{
+						auto ed = lasso->getFromValueTree(data);
+						objects.add(ed.obj);
+					}
+				});
+
+				return new DummyComplexDataProvider::Editor(objects, this, getUpdater(), um, getValueTree());
+			}
+		}
+
+		return nullptr;
+	}
 
 	virtual ~NodeComponent() = default;
 	
 	void onColour(const Identifier&, const var&)
 	{
+		setColour(complex_ui_laf::NodeColourId, Helpers::getNodeColour(getValueTree()));
 		repaint();
 		header.repaint();
+	}
+
+	double getParameterValue(int index) const override
+	{
+		auto ptree = getValueTree().getChildWithName(PropertyIds::Parameters).getChild(index);
+		return ParameterHelpers::getThisValueOrFindDirectSource(ptree);
+	}
+
+	InvertableParameterRange getParameterRange(int index) const override
+	{
+		auto ptree = getValueTree().getChildWithName(PropertyIds::Parameters).getChild(index);
+		return RangeHelpers::getDoubleRange(ptree);
 	}
 
 	Path createPath(const String& url) const override
@@ -901,7 +959,7 @@ struct NodeComponent : public Component,
 
 		for (auto p : data.getChildWithName(PropertyIds::Parameters))
 		{
-			addAndMakeVisible(parameters.add(new ParameterComponent(p, um)));
+			addAndMakeVisible(parameters.add(new ParameterComponent(getUpdater(), p, um)));
 		}
 
 		auto modOutput = data.getChildWithName(PropertyIds::ModulationTargets);
@@ -1015,7 +1073,7 @@ struct NodeComponent : public Component,
 		resized();
 	}
 
-	virtual Component* createPopupComponent() { return new PopupComponent(getValueTree(), um); }
+	virtual Component* createPopupComponent() { return new PopupComponent(*this); }
 
 	void mouseDown(const MouseEvent& e) override
 	{
@@ -1036,6 +1094,8 @@ struct NodeComponent : public Component,
 	int getNumParameters() const { return parameters.size(); }
 
 	WeakReference<CablePinBase> getFirstModOutput() { return modOutputs.getFirst(); }
+
+	PooledUIUpdater* getUpdater() { return lasso != nullptr ? lasso->getUpdater() : nullptr; }
 
 protected:
 

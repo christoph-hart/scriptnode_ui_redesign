@@ -86,6 +86,369 @@ struct CommentHelpers
 	static Point<int> getCommentOffset(ValueTree data);
 };
 
+namespace display_buffer_library
+{
+
+struct BuildData
+{
+	operator bool() const { return rb != nullptr; }
+
+	ValueTree v;
+	SimpleRingBuffer::Ptr rb;
+	NodeComponentParameterSource* pSource;
+	PooledUIUpdater* updater;
+};
+
+struct WrappedDisplayBufferComponent: public Component,
+									  public PooledUIUpdater::SimpleTimer
+{
+	WrappedDisplayBufferComponent(const BuildData& bd_):
+	  SimpleTimer(bd_.updater, false),
+	  bd(bd_)
+	{}
+
+	~WrappedDisplayBufferComponent() override {}
+
+protected:
+
+	struct WatchedParameter
+	{
+		String name;
+		int index;
+		double lastValue;
+	};
+
+	void addWatchedParameterIds(const StringArray& parameters)
+	{
+		auto ptree = bd.v.getChildWithName(PropertyIds::Parameters);
+
+		int idx = 0;
+
+		watchedParameters.clear();
+
+		for(auto p: ptree)
+		{
+			auto pid = p[PropertyIds::ID].toString();
+			if(parameters.contains(pid))
+			{
+				watchedParameters.push_back({ pid, idx, 0.0 });
+				
+			}
+				
+
+			idx++;
+		}
+
+		if(!watchedParameters.empty())
+			start();
+		else
+			stop();
+	}
+
+	
+	complex_ui_laf laf;
+	BuildData bd;
+
+	virtual void onParameterChange(const WatchedParameter& p)
+	{
+	}
+
+private:
+
+	void timerCallback() override
+	{
+		for(auto& wp: watchedParameters)
+		{
+			auto lv = wp.lastValue;
+			auto nv = bd.pSource->getParameterValue(wp.index);
+
+			wp.lastValue = nv;
+
+			if(lv != nv)
+				onParameterChange(wp);
+		}
+	}
+
+	std::vector<WatchedParameter> watchedParameters;
+	
+	JUCE_DECLARE_WEAK_REFERENCEABLE(WrappedDisplayBufferComponent);
+	
+};
+
+struct oscillator: public WrappedDisplayBufferComponent
+{
+	oscillator(const BuildData& bd):
+	  WrappedDisplayBufferComponent(bd)
+	{
+		bd.rb->setCurrentWriter(&oscProvider);
+
+		{
+			SimpleRingBuffer::ScopedPropertyCreator sv(bd.rb.get());
+			bd.rb->registerPropertyObject<OscillatorDisplayProvider::OscillatorDisplayObject>();
+		}
+
+		dp = new OscillatorDisplayProvider::osc_display();
+		addAndMakeVisible(dp);
+		dp->setComplexDataUIBase(bd.rb.get());
+		dp->setSpecialLookAndFeel(&laf, false);
+		
+		bd.rb->getUpdater().sendDisplayChangeMessage(bd.rb->getReadBuffer().getNumSamples(), sendNotificationSync);
+
+		addAndMakeVisible(dp);
+
+		addWatchedParameterIds({ "Mode", "Phase" });
+
+		setSize(140, 50);
+	}
+
+	void onParameterChange(const WatchedParameter& p) override
+	{
+		if(p.name == "Mode")
+			oscProvider.currentMode = (OscillatorDisplayProvider::Mode)(int)p.lastValue;
+
+		if(p.name == "Phase")
+			oscProvider.uiData.uptime = p.lastValue * 2048.0;
+
+		bd.rb->getUpdater().sendDisplayChangeMessage(bd.rb->getReadBuffer().getNumSamples(), sendNotificationSync);
+	}
+
+	void resized() override
+	{
+		dp->setBounds(getLocalBounds());
+	}
+
+	ScopedPointer<OscillatorDisplayProvider::osc_display> dp;
+	OscillatorDisplayProvider oscProvider;
+
+	static WrappedDisplayBufferComponent* create(const BuildData& bd)
+	{
+		return new oscillator(bd);
+	}
+};
+
+struct Factory
+{
+	
+
+	using CreateFunction = std::function<WrappedDisplayBufferComponent*(const BuildData&)>;
+
+	Factory()
+	{
+	}
+
+	WrappedDisplayBufferComponent* create(const BuildData& bd)
+	{
+		if(!bd)
+			return nullptr;
+
+		auto id = bd.v[PropertyIds::FactoryPath].toString();
+
+		if(data->functions.find(id) != data->functions.end())
+		{
+			return data->functions.at(id)(bd);
+		}
+		
+		return nullptr;
+	}
+
+	struct Data
+	{
+		Data()
+		{
+			registerFunction<display_buffer_library::oscillator>("core.oscillator");
+		}
+
+		template <typename T> void registerFunction(const String& id)
+		{
+			functions[id] = T::create;
+		}
+
+		std::map<String, CreateFunction> functions;
+	};
+
+	SharedResourcePointer<Data> data;
+};
+
+}
+
+struct DummyComplexDataProvider: public ExternalDataHolder
+{
+	struct Editor: public Component
+	{
+		Editor(const ComplexDataUIBase::List& dataObjects_, NodeComponentParameterSource* pSource, PooledUIUpdater* updater, UndoManager* um, const ValueTree& v):
+		  dataObjects(dataObjects_)
+		{
+			display_buffer_library::Factory f;
+			display_buffer_library::BuildData bd;
+
+			bd.rb = dynamic_cast<SimpleRingBuffer*>(dataObjects.getFirst().get());
+			bd.pSource = pSource;
+			bd.v = v;
+			bd.updater = updater;
+
+			if(auto c = f.create(bd))
+			{
+				addAndMakeVisible(c);
+				editors.add(c);
+				setSize(c->getWidth(), c->getHeight());
+			}
+			else
+			{
+				int w = 256;
+				int h = 80;
+
+				for (auto obj : dataObjects)
+				{
+					obj->setUndoManager(um);
+					obj->setGlobalUIUpdater(updater);
+					auto ed = ExternalData::createEditor(obj);
+
+					if (dynamic_cast<SimpleRingBuffer*>(obj) == nullptr)
+					{
+						w = 512;
+						h = 100;
+					}
+
+					ed->setSpecialLookAndFeel(&laf, false);
+					editors.add(dynamic_cast<Component*>(ed));
+					addAndMakeVisible(editors.getLast());
+				}
+
+				setSize(w, dataObjects.size() * h);
+			}
+		}
+
+		void resized() override
+		{
+			auto b = getLocalBounds();
+
+			for(auto e: editors)
+			{
+				e->setBounds(b.removeFromTop(100));
+			}
+		}
+
+		OscillatorDisplayProvider oscProvider;
+
+		ComplexDataUIBase::List dataObjects;
+		OwnedArray<Component> editors;
+		complex_ui_laf laf;
+	};
+
+	int getNumDataObjects(ExternalData::DataType t) const override
+	{
+		switch(t)
+		{
+		case ExternalData::DataType::Table:
+			return tables.size();
+		case ExternalData::DataType::SliderPack:
+			return sliderPacks.size();
+		case ExternalData::DataType::AudioFile:
+			return audioFiles.size();
+		case ExternalData::DataType::FilterCoefficients:
+			return filters.size();
+		case ExternalData::DataType::DisplayBuffer:
+			return displayBuffers.size();
+		case ExternalData::DataType::numDataTypes:
+			break;
+		case ExternalData::DataType::ConstantLookUp:
+			break;
+		default:
+			break;
+		}
+
+		return 0;
+	}
+
+	Table* getTable(int index) override 
+	{
+		return this->get<SampleLookupTable, Table>(tables, index);
+	}
+
+	SliderPackData* getSliderPack(int index) override
+	{
+		return this->get<SliderPackData, SliderPackData>(sliderPacks, index);
+	}
+
+	MultiChannelAudioBuffer* getAudioFile(int index) override
+	{
+		return this->get<MultiChannelAudioBuffer, MultiChannelAudioBuffer>(audioFiles, index);
+	}
+
+	FilterDataObject* getFilterData(int index) override
+	{
+		return this->get<FilterDataObject, FilterDataObject>(filters, index);
+	}
+
+	SimpleRingBuffer* getDisplayBuffer(int index) override
+	{
+		auto rb = this->get<SimpleRingBuffer, SimpleRingBuffer>(displayBuffers, index);
+
+		rb->setRingBufferSize(1, 8192);
+		rb->setSamplerate(44100.0);
+
+		AudioSampleBuffer bf(1, 8192);
+
+		for(int i = 0; i < 8192; i++)
+		{
+			bf.setSample(0, i, hmath::fmod((float)((float)i / (float)1024), 1.0f));
+		}
+
+		rb->write(bf, 0, 8192);
+
+		return rb;
+	}
+
+	bool removeDataObject(ExternalData::DataType t, int index) override
+	{
+		jassertfalse;
+		return false;
+	}
+
+	ExternalData getFromValueTree(const ValueTree& v)
+	{
+		auto type = ExternalData::getDataTypeForId(v.getType());
+
+		auto idx = (int)v[PropertyIds::Index];
+		auto data = getData(type, idx);
+
+		if(idx == -1)
+		{
+			auto b64 = v[PropertyIds::EmbeddedData].toString();
+
+			if(data.obj != nullptr)
+				data.obj->fromBase64String(b64);
+		}
+
+		return data;
+	}
+
+private:
+
+	template <typename Derived, typename T> T* get(ReferenceCountedArray<T>& list, int index)
+	{
+		if (index == -1)
+			return new Derived();
+
+		if (isPositiveAndBelow(index, list.size()))
+			return list[index].get();
+
+		while (list.size() != (index + 1))
+			list.add(nullptr);
+
+		list.set(index, new Derived());
+		return list[index].get();
+	}
+
+	ReferenceCountedArray<SliderPackData> sliderPacks;
+	ReferenceCountedArray<Table> tables;
+	ReferenceCountedArray<MultiChannelAudioBuffer> audioFiles;
+	ReferenceCountedArray<SimpleRingBuffer> displayBuffers;
+	ReferenceCountedArray<FilterDataObject> filters;
+
+};
+
+
 struct LayoutTools
 {
 	struct CableData
@@ -122,47 +485,13 @@ struct LayoutTools
 	static void alignCables(const Array<CableData>& list, UndoManager* um);
 	static void distributeCableOffsets(const Array<ValueTree>& list, UndoManager* um);
 
-	static void drawTextWithLOD(Graphics& g, int lod, const String& text, Rectangle<float> tb, Justification j)
-	{
-		if(lod < 2)
-		{
-			g.drawText(text, tb, j);
-		}
-		else
-		{
-			auto h = GLOBAL_BOLD_FONT().getHeight();
-			auto w = h * 0.4f * (float)text.length();
-
-			tb = j.appliedToRectangle(Rectangle<float>(tb.getX(), tb.getY(), w, h-2.0f), tb);
-			
-			Graphics::ScopedSaveState ss(g);
-
-			g.setOpacity(0.25f);
-			g.fillRect(tb.reduced(3.0f));
-		}
-	}
-
-	static void fillRoundedRectangle(Graphics& g, int lod, Rectangle<float> b, float cornerSize)
-	{
-		if(lod == 0)
-			g.fillRoundedRectangle(b, cornerSize);
-		else
-			g.fillRect(b);
-	}
-
 	static float getCableThickness(int lod)
 	{
 		float data[3] = { 1.0f, 2.0f, 4.0f };
 		return data[jlimit(0, 2, lod)];
 	}
 
-	static void fillPathOrEllipse(Graphics& g, int lod, const Path& p)
-	{
-		if(lod <= 1)
-			g.fillPath(p);
-		else
-			g.fillEllipse(p.getBounds());
-	}
+	
 
 };
 
@@ -452,6 +781,7 @@ struct ParameterHelpers
 
 	/** Searches the entire network tree for the matching parameter. */
 	static ValueTree getTarget(const ValueTree& con);
+	static double getThisValueOrFindDirectSource(juce::ValueTree ptree);
 };
 
 struct DataBaseHelpers
@@ -471,62 +801,6 @@ struct DataBaseHelpers
 	}
 };
 
-struct LODManager : public hise::ZoomableViewport::ZoomListener
-{
-	LODManager(ZoomableViewport& zp_) :
-		zp(&zp_)
-	{
-		zp->addZoomListener(this);
-		currentLOD = zoomFactorToLOD(zp->getCurrentZoomFactor());
-	}
 
-	~LODManager() override
-	{
-		if (auto z = zp.getComponent())
-			z->removeZoomListener(this);
-	};
-
-	static int zoomFactorToLOD(float sf)
-	{
-		if (sf > JUCE_LIVE_CONSTANT_OFF(0.85))
-			return 0;
-		if (sf > JUCE_LIVE_CONSTANT_OFF(0.4))
-			return 1;
-
-		return 2;
-	}
-
-	void paintLOD(Graphics& g, Rectangle<int> b)
-	{
-		auto s = 16.0f / zp->getCurrentZoomFactor();
-		g.setFont(GLOBAL_BOLD_FONT().withHeight(s));
-		g.setColour(Colours::white.withAlpha(0.5f));
-		g.drawText(String(currentLOD), b.toFloat(), Justification::centred);
-	}
-
-	Component& asComponent() { return *dynamic_cast<Component*>(this); }
-
-	static int getLOD(Component& c)
-	{
-		auto lm = c.findParentComponentOfClass<LODManager>();
-		return lm->currentLOD;
-	}
-
-	void zoomChanged(float newScalingFactor) override
-	{
-		auto newLOD = zoomFactorToLOD(newScalingFactor);
-
-		if (newLOD != currentLOD)
-		{
-			currentLOD = newLOD;
-			asComponent().repaint();
-		}
-	}
-
-private:
-
-	int currentLOD = 0;
-	Component::SafePointer<ZoomableViewport> zp;
-};
 
 }

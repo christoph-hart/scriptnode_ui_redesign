@@ -909,6 +909,17 @@ juce::ValueTree ParameterHelpers::getTarget(const ValueTree& con)
 	return getConnection(con);
 }
 
+double ParameterHelpers::getThisValueOrFindDirectSource(juce::ValueTree ptree)
+{
+	while(ptree[PropertyIds::Automated])
+	{
+		auto con = getConnection(ptree);
+		ptree = findConnectionParent(con);
+	}
+
+	return (double)ptree[PropertyIds::Value];
+}
+
 void LayoutTools::alignVertically(const Array<ValueTree>& list, UndoManager* um)
 {
 	if (list.isEmpty())

@@ -236,16 +236,16 @@ struct CableComponent : public CableBase,
 
 		void paint(Graphics& g) override
 		{
-			auto lod = LODManager::getLOD(*this);
+			LODManager::LODGraphics lg(g, *this);
 
 			if (attachedCable.getComponent() != nullptr)
 			{
 				g.setFont(GLOBAL_FONT());
 				g.setColour(Colour(0xdd222222));
 
-				LayoutTools::fillRoundedRectangle(g, lod, getLocalBounds().toFloat(), (float)getHeight() * 0.5f);				
+				lg.fillRoundedRectangle(getLocalBounds().toFloat(), (float)getHeight() * 0.5f);				
 				g.setColour(attachedCable->colour2);
-				LayoutTools::drawTextWithLOD(g, lod, currentText, getLocalBounds().toFloat().reduced(5.0f, 0.0f), Justification::right);
+				lg.drawText(currentText, getLocalBounds().toFloat().reduced(5.0f, 0.0f), Justification::right);
 			}
 		}
 
@@ -435,13 +435,15 @@ struct CableComponent : public CableBase,
 			{
 				CableBase::paint(g);
 
+
+
 				auto c = attachment == Attachment::Source ? colour2 : colour1;
 
 				g.setColour(c.withAlpha(0.1f));
 
-				auto lod = LODManager::getLOD(*this);
+				LODManager::LODGraphics lg(g, *this);
 
-				LayoutTools::fillRoundedRectangle(g, lod, textBounds.reduced(1.0f), 3.0f);
+				lg.fillRoundedRectangle(textBounds.reduced(1.0f), 3.0f);
 
 				g.setColour(c);
 
@@ -456,7 +458,7 @@ struct CableComponent : public CableBase,
 				}
 				
 				g.setFont(GLOBAL_FONT());
-				LayoutTools::drawTextWithLOD(g, lod, getTextToDisplay(), textBounds, Justification::centred);
+				lg.drawText(getTextToDisplay(), textBounds, Justification::centred);
 			}
 
 			CableHolder& parent;
@@ -954,8 +956,9 @@ struct DspNetworkComponent : public Component,
 		numActions
 	};
 
-	DspNetworkComponent(ZoomableViewport& zp, const ValueTree& networkTree, const ValueTree& container) :
+	DspNetworkComponent(PooledUIUpdater* updater, ZoomableViewport& zp, const ValueTree& networkTree, const ValueTree& container) :
 		CableHolder(networkTree),
+		Lasso(updater),
 		LODManager(zp),
 		data(networkTree)
 	{
@@ -2139,15 +2142,28 @@ struct DspNetworkComponent : public Component,
 	{
 		if(auto vp = c->findParentComponentOfClass<ZoomableViewport>())
 		{
+			auto updater = c->findParentComponentOfClass<Lasso>()->getUpdater();
 			auto root = valuetree::Helpers::findParentWithType(newRoot, PropertyIds::Network);
-			auto n = new DspNetworkComponent(*vp, root,newRoot);
+			auto n = new DspNetworkComponent(updater, *vp, root,newRoot);
 			vp->setNewContent(n, nullptr);
 		}
 	}
 
 private:
 
-	LookAndFeel_V4 calloutLAF;
+	struct CLAF: public LookAndFeel_V4
+	{
+		int getCallOutBoxBorderSize (const CallOutBox&) override
+		{
+			return 30;
+		}
+
+		float getCallOutBoxCornerSize (const CallOutBox&) override
+		{
+			return 5.0f;
+		}
+
+	} calloutLAF;
 
 	struct DraggedNode
 	{

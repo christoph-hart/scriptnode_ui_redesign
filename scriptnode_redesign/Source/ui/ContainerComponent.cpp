@@ -622,6 +622,8 @@ void ContainerComponent::Group::draw(Graphics& g)
 {
 	RectangleList<int> bounds;
 
+	LODManager::LODGraphics lg(g, parent);
+
 	auto nodeTree = parent.getValueTree().getChildWithName(PropertyIds::Nodes);
 
 	Colour c;
@@ -637,22 +639,24 @@ void ContainerComponent::Group::draw(Graphics& g)
 
 	auto b = bounds.getBounds().expanded(10).toFloat();
 
-	b = b.withTop(b.getY() - 20.0f);
+	auto h = 20.0f + lg.getCurrentLOD() * 10;
+
+	b = b.withTop(b.getY() - h);
 
 	g.setColour(c.withAlpha(0.05f));
-	g.fillRoundedRectangle(b, 5.0f);
+	lg.fillRoundedRectangle(b, 5.0f);
 	g.setColour(c.withAlpha(0.6f));
-	g.drawRoundedRectangle(b, 5.0f, 1.0f);
+	lg.drawRoundedRectangle(b, 5.0f, -1.0f);
 
 	lastBounds = b;
 
-	auto f = GLOBAL_BOLD_FONT();
+	auto f = GLOBAL_BOLD_FONT().withHeight(h - 5.0f);
 
 	name = v[PropertyIds::ID].toString();
 
 	g.setColour(c);
 	g.setFont(f);
-	g.drawText(name, b.removeFromTop(20.0f), Justification::centred);
+	g.drawText(name, b.removeFromTop(h), Justification::centred);
 
 	
 }

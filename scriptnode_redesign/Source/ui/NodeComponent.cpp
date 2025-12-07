@@ -70,7 +70,7 @@ void NodeComponent::HeaderComponent::mouseDown(const MouseEvent& e)
 	if(Helpers::isRootNode(parent.getValueTree()))
 		return;
 
-	if(e.mods.isRightButtonDown())
+	if(e.mods.isRightButtonDown() && parent.getValueTree()[PropertyIds::Folded])
 	{
 		if(auto pc = parent.createPopupComponent())
 		{
@@ -343,7 +343,8 @@ void NodeComponent::HeaderComponent::BreadcrumbButton::mouseUp(const MouseEvent&
 {
 	auto zp = findParentComponentOfClass<ZoomableViewport>();
 	auto root = valuetree::Helpers::getRoot(data);
-	zp->setNewContent(new DspNetworkComponent(*zp, root, data), nullptr);
+	auto updater = findParentComponentOfClass<Lasso>()->getUpdater();
+	zp->setNewContent(new DspNetworkComponent(updater, *zp, root, data), nullptr);
 }
 
 void NodeComponent::onFold(const Identifier& id, const var& newValue)
@@ -378,7 +379,7 @@ void NodeComponent::onFold(const Identifier& id, const var& newValue)
 			});
 
 		for (auto i : automatedParameters)
-			addAndMakeVisible(parameters.add(new FoldedInput(i, um)));
+			addAndMakeVisible(parameters.add(new FoldedInput(getUpdater(), i, um)));
 
 		for (auto o : connectedOutputs)
 			addAndMakeVisible(modOutputs.add(new FoldedOutput(o, um)));
