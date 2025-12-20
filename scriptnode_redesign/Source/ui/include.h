@@ -35,8 +35,11 @@
 #include <JuceHeader.h>
 
 #include "Helpers.h"
+#include "ComponentFactory.h"
 #include "NodeSubComponent.h"
 #include "NodeComponent.h"
 #include "NodeObjects.h"
 #include "ContainerComponent.h"
+#include "CableComponents.h"
+#include "ParentClasses.h"
 #include "DspNetworkComponent.h"

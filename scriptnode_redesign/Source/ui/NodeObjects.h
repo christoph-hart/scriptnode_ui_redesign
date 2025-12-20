@@ -41,14 +41,66 @@ struct ProcessNodeComponent : public NodeComponent
 {
 	static constexpr int PinSize = 8;
 
+	struct VuMeter : public Component
+	{
+		VuMeter(bool input_) :
+			input(input_)
+		{
+			setOpaque(true);
+		};
+
+		int getWidthToUse() const
+		{
+			return numChannels * 4 + 4;
+		}
+
+		void paint(Graphics& g) override
+		{
+			LODManager::LODGraphics lg(g, *this);
+
+			g.setColour(Colour(0xFF222222));
+
+			if(lg.isFullyZoomedOut())
+			{
+				g.fillRect(getLocalBounds());
+				return;
+			}
+
+			auto b = getLocalBounds().toFloat();
+			
+			g.fillRoundedRectangle(b, 3.0f);
+
+			b = b.reduced(2.0f);
+
+			auto w = (b.getWidth() + 2.0f) / (float)numChannels;
+
+			for (int i = 0; i < numChannels; i++)
+			{
+				auto x = b.removeFromLeft(w - 2.0f);
+
+				x = x.removeFromBottom(x.getHeight() * (0.4f + i * 0.1f));
+
+				g.setColour(Colours::white.withAlpha(0.7f));
+				g.fillRect(x);
+				b.removeFromLeft(2.0f);
+			}
+		}
+
+		const bool input;
+		int numChannels = 2;
+	};
+
 	struct RoutableSignalComponent : public CablePinBase
 	{
 		RoutableSignalComponent(ProcessNodeComponent& parent_) :
 			CablePinBase(parent_.getValueTree(), parent_.um),
-			parent(parent_)
+			parent(parent_),
+			meter(true)
 		{
 			if(!canBeTarget())
 				setEnableDragging(true);
+			else
+				addAndMakeVisible(meter);
 
 			setSize(Helpers::ParameterWidth, Helpers::SignalHeight);
 		}
@@ -104,24 +156,30 @@ struct ProcessNodeComponent : public NodeComponent
 
 			s << Helpers::getHeaderTitle(getNodeTree()) << ".";
 
-			s << (canBeTarget() ? "Feedback Input" : "Feedback Output");
+			s << (canBeTarget() ? "Input" : "Output");
 
 			return s;
 		}
 
 		void resized() override
 		{
+			auto b = getLocalBounds().toFloat();
+
 			if(!canBeTarget())
 			{
 				auto b = getLocalBounds().toFloat();
 				auto pb = b.removeFromRight(getHeight());
 				parent.scalePath(targetIcon, pb.reduced(12.0f));
 			}
+			else
+			{
+				meter.setBounds(b.removeFromLeft(20).reduced(5).toNearestInt());
+			}
 
 			screws.clear();
 
 
-			auto b = getLocalBounds().toFloat();
+			
 
 			auto paddingX = JUCE_LIVE_CONSTANT_OFF(8);
 			auto paddingY = JUCE_LIVE_CONSTANT_OFF(6);
@@ -161,14 +219,21 @@ struct ProcessNodeComponent : public NodeComponent
 		std::vector<Path> screws;
 
 		ProcessNodeComponent& parent;
-		
+		VuMeter meter;
 	};
 
+	
+
 	ProcessNodeComponent(Lasso* l, const ValueTree& v, UndoManager* um_) :
-		NodeComponent(l, v, um_, true)
+		NodeComponent(l, v, um_, true),
+		input(false),
+		output(true)
 	{
 		if (Helpers::hasRoutableSignal(v))
 			addAndMakeVisible(routableSignal = new RoutableSignalComponent(*this));
+
+		addAndMakeVisible(input);
+		addAndMakeVisible(output);
 
 		setOpaque(true);
 
@@ -192,8 +257,9 @@ struct ProcessNodeComponent : public NodeComponent
 
 	void paint(Graphics& g) override
 	{
+		auto nc = Helpers::getNodeColour(getValueTree());
 		g.fillAll(getValueTree()[PropertyIds::Folded] ? Colour(0xFF292929) : Colour(0xFF353535));
-		g.setColour(Helpers::getNodeColour(getValueTree()));
+		g.setColour(nc);
 		g.drawRect(getLocalBounds().toFloat(), 1.0f);
 
 		auto b = getLocalBounds().toFloat();
@@ -228,20 +294,16 @@ struct ProcessNodeComponent : public NodeComponent
 				if(routableSignal->canBeTarget())
 				{
 					p2 = cables[i].second.getBounds().getCentre();
-					offset = -40.0f;
 				}
 				else
 				{
 					p2 = cables[i].first.getBounds().getCentre();
 					std::swap(p2, p1);
-					offset = 35.0f;
 				}
 					
 				offset += 6.0f * ((float)i / (float)numChannels);
 
 				Path p;
-
-
 
 				Helpers::createCustomizableCurve(p, p1, p2, offset, lod == 0 ? 3.0f : 0.0f, true);
 
@@ -264,16 +326,19 @@ struct ProcessNodeComponent : public NodeComponent
 		{
 			if(lod == 0)
 			{
-				g.setColour(Colours::grey);
-				g.fillPath(c.first);
-				g.fillPath(c.second);
-
 				g.setColour(Colours::black.withAlpha(0.7f));
 				g.drawLine({ c.first.getBounds().getCentre(), c.second.getBounds().getCentre() }, 3.0f);
 			}
 			
 			g.setColour(cl);
 			g.drawLine({ c.first.getBounds().getCentre(), c.second.getBounds().getCentre() }, LayoutTools::getCableThickness(lod));
+
+			if(lod == 0)
+			{
+				g.setColour(Colours::grey);
+				g.fillPath(c.first);
+				g.fillPath(c.second);
+			}
 		}
 	}
 
@@ -311,14 +376,10 @@ struct ProcessNodeComponent : public NodeComponent
 		}
 
 		for (auto p : parameters)
-		{
 			p->setTopLeftPosition(p->getPosition().translated(0, deltaY));
-		}
 
 		for (auto m : modOutputs)
-		{
 			m->setTopLeftPosition(m->getPosition().translated(0, deltaY));
-		}
 
 		cables.clear();
 
@@ -328,8 +389,17 @@ struct ProcessNodeComponent : public NodeComponent
 
 		numChannels = Helpers::getNumChannels(getValueTree());
 
+		input.numChannels = numChannels;
+		output.numChannels = numChannels;
+
+		input.setBounds(sb.removeFromLeft(input.getWidthToUse() + 10).reduced(5));
+		output.setBounds(sb.removeFromRight(input.getWidthToUse() + 10).reduced(5));
+
+		if(routableSignal != nullptr)
+			routableSignal->meter.numChannels = numChannels;
+
 		auto delta = sb.getHeight() / (numChannels + 1);
-		sb = sb.reduced(delta * 0.5f);
+		sb = sb.reduced(0.0f, delta * 0.5f);
 
 		for(int i = 0; i < numChannels; i++)
 		{
@@ -350,6 +420,8 @@ struct ProcessNodeComponent : public NodeComponent
 	ScopedPointer<RoutableSignalComponent> routableSignal;
 	ScopedPointer<Component> extraBody;
 	int numChannels = 2;
+
+	VuMeter input, output;
 };
 
 struct LockedContainerComponent: public ProcessNodeComponent,
@@ -415,11 +487,24 @@ struct NoProcessNodeComponent : public NodeComponent
 
 		if (extraBody != nullptr)
 		{
-			addAndMakeVisible(extraBody);
-			setFixSize(extraBody->getLocalBounds().expanded(10));
+			extraBody->setUsePreferredLayout(true);
+			addAndMakeVisible(extraBody.get());
+			setFixSize(extraBody->getLocalBounds().expanded(10), extraBody->getPreferredLayout());
 		}
 		else
 			setFixSize({});
+
+		if(getValueTree().getChildWithName(PropertyIds::SwitchTargets).isValid())
+		{
+			multiOutputManager = new ParameterHelpers::ModOutputSyncer(getValueTree(), getUndoManager());
+			multiOutputManager->onChange = [this]()
+			{
+				rebuildModulationOutputs();
+				extraBody->resized();
+				setFixSize(extraBody->getLocalBounds().expanded(10), extraBody->getPreferredLayout());
+			};
+		}
+			
 	}
 
 	void paint(Graphics& g) override
@@ -464,24 +549,50 @@ struct NoProcessNodeComponent : public NodeComponent
 			if (hasSignal)
 				b.removeFromTop(Helpers::SignalHeight);
 
-			extraBody->setTopLeftPosition(b.getTopLeft().translated(10, 10));
+			auto l = extraBody->getPreferredLayout();
 
-			b.removeFromTop(extraBody->getHeight());
-
-			for (auto p : parameters)
+			if (l == ScriptnodeExtraComponentBase::PreferredLayout::PreferBetween)
 			{
-				p->setTopLeftPosition(p->getPosition().translated(0, extraBody->getHeight() + 20));
-			}
+				auto yOffset = b.getY() + 10;
+				auto x = Helpers::ParameterMargin;
 
-			for (auto m : modOutputs)
+				extraBody->setTopLeftPosition(b.getTopLeft().translated(Helpers::ParameterWidth + Helpers::ParameterMargin, 10));
+
+				auto order = extraBody->getParameterOrder();
+
+				if(order.isEmpty())
+				{
+					for (auto p : parameters)
+						p->setTopLeftPosition(p->getPosition().translated(0, 10));
+				}
+				else
+				{
+					for (int i = 0; i < parameters.size(); i++)
+					{
+						auto pIndex = order[i];
+						parameters[pIndex]->setTopLeftPosition({ x, yOffset + i * (Helpers::ParameterHeight + Helpers::ParameterMargin) });
+					}
+				}
+
+				for (auto m : modOutputs)
+					m->setTopLeftPosition(m->getPosition().translated(0, 10));
+
+				return;
+			}
+			else
 			{
-				m->setTopLeftPosition(m->getPosition().translated(0, extraBody->getHeight() + 20));
-			}
+				extraBody->setTopLeftPosition(b.getTopLeft().translated(10, 10));
 
+				for (auto p : parameters)
+					p->setTopLeftPosition(p->getPosition().translated(0, extraBody->getHeight() + 20));
+
+				for (auto m : modOutputs)
+					m->setTopLeftPosition(m->getPosition().translated(0, extraBody->getHeight() + 20));
+			}
 		}
 	}
 
-	ScopedPointer<Component> extraBody;
+	ScopedPointer<ScriptnodeExtraComponentBase> extraBody;
 };
 
 }

@@ -5,6 +5,14 @@
   <MAINGROUP id="MyjFPi" name="scriptnode_redesign">
     <GROUP id="{37DFF0EB-B1EA-20E2-9CF4-F23A7F7AA107}" name="Source">
       <GROUP id="{3121116D-14F5-C99E-65EF-96AB5FB4AF9F}" name="ui">
+        <FILE id="iQnRub" name="CableComponents.cpp" compile="0" resource="0"
+              file="Source/ui/CableComponents.cpp"/>
+        <FILE id="PB8hB7" name="CableComponents.h" compile="0" resource="0"
+              file="Source/ui/CableComponents.h"/>
+        <FILE id="U0iTD2" name="ComponentFactory.cpp" compile="0" resource="0"
+              file="Source/ui/ComponentFactory.cpp"/>
+        <FILE id="pq9pEY" name="ComponentFactory.h" compile="0" resource="0"
+              file="Source/ui/ComponentFactory.h"/>
         <FILE id="C6tinm" name="ContainerComponent.cpp" compile="0" resource="0"
               file="Source/ui/ContainerComponent.cpp"/>
         <FILE id="g8Bp0S" name="ContainerComponent.h" compile="0" resource="0"
@@ -26,6 +34,9 @@
               file="Source/ui/NodeSubComponent.cpp"/>
         <FILE id="faXOFu" name="NodeSubComponent.h" compile="0" resource="0"
               file="Source/ui/NodeSubComponent.h"/>
+        <FILE id="wwJg6V" name="ParentClasses.cpp" compile="0" resource="0"
+              file="Source/ui/ParentClasses.cpp"/>
+        <FILE id="O86b2O" name="ParentClasses.h" compile="0" resource="0" file="Source/ui/ParentClasses.h"/>
       </GROUP>
       <GROUP id="{F0D7A64F-7CB2-0A6D-CDA0-C5540F8C4C7A}" name="bodys">
         <FILE id="dO3MxX" name="cable_expr.png" compile="0" resource="1" file="Source/bodys/cable_expr.png"/>

@@ -36,7 +36,7 @@ namespace scriptnode {
 using namespace hise;
 using namespace juce;
 
-Component* DummyBody::createDummyComponent(const String& path)
+ScriptnodeExtraComponentBase* DummyBody::createDummyComponent(const String& path)
 {
 	auto nodeType = path.fromFirstOccurrenceOf(".", false, false);
 
@@ -139,6 +139,64 @@ void Helpers::setNodeProperty(ValueTree v, const Identifier& propertyName, const
 	np.setProperty(PropertyIds::Value, value, nullptr);
 
 	prop.addChild(np, -1, um);
+}
+
+juce::Colour Helpers::getFadeColour(int index, int numPaths)
+{
+	if (numPaths == 0)
+		return Colours::transparentBlack;
+
+	auto hue = (float)index / (float)numPaths;
+
+	auto saturation = JUCE_LIVE_CONSTANT_OFF(0.3f);
+	auto brightness = JUCE_LIVE_CONSTANT_OFF(1.0f);
+	auto minHue = JUCE_LIVE_CONSTANT_OFF(0.2f);
+	auto maxHue = JUCE_LIVE_CONSTANT_OFF(0.8f);
+	auto alpha = JUCE_LIVE_CONSTANT_OFF(0.4f);
+
+	hue = jmap(hue, minHue, maxHue);
+
+	return Colour::fromHSV(hue, saturation, brightness, alpha);
+}
+
+juce::ValueTree Helpers::findParentNode(const ValueTree& v)
+{
+	return valuetree::Helpers::findParentWithType(v, PropertyIds::Node);
+}
+
+void Helpers::createCurve(Path& path, Point<float> start, Point<float> end, bool preferLines)
+{
+
+	float dx = end.x - start.x;
+	float dy = end.y - start.y;
+
+	if (preferLines)
+	{
+		path.lineTo(end);
+	}
+	else
+	{
+		float controlOffsetX = dx * 0.5f;
+
+		juce::Point<float> cp1(start.x + controlOffsetX, start.y);
+		juce::Point<float> cp2(end.x - controlOffsetX, end.y);
+
+		path.cubicTo(cp1, cp2, end);
+	}
+}
+
+void Helpers::forEachVisibleNode(const ValueTree& rootNode, const std::function<void(ValueTree)>& f, bool forceFirst)
+{
+	if (rootNode.getType() == PropertyIds::Node)
+		f(rootNode);
+
+	auto childNodes = rootNode.getChildWithName(PropertyIds::Nodes);
+
+	if (childNodes.isValid() && (!isFoldedOrLockedContainer(rootNode) || forceFirst))
+	{
+		for (auto cn : childNodes)
+			forEachVisibleNode(cn, f, false);
+	}
 }
 
 bool Helpers::hasRoutableSignal(const ValueTree& v)
@@ -472,6 +530,28 @@ Rectangle<int> Helpers::getBoundsInRoot(const ValueTree& v, bool includingCommen
 	return b;
 }
 
+int Helpers::getNumChannels(const ValueTree& v)
+{
+	return (int)v.getProperty(PropertyIds::CompileChannelAmount, 2);
+}
+
+void Helpers::updateChannelCount(const ValueTree& root, bool remove, UndoManager* um)
+{
+	if (remove)
+	{
+		valuetree::Helpers::forEach(root, [&](ValueTree& v)
+			{
+				v.removeProperty(PropertyIds::CompileChannelAmount, um);
+				return false;
+			});
+	}
+	else
+	{
+		auto numChannels = getNumChannels(root);
+		updateChannelRecursive(root.getChild(0), numChannels, um);
+	}
+}
+
 void Helpers::fixOverlapRecursive(ValueTree node, UndoManager* um, bool sortProcessNodesFirst)
 {
 	jassert(node.getType() == PropertyIds::Node);
@@ -481,7 +561,7 @@ void Helpers::fixOverlapRecursive(ValueTree node, UndoManager* um, bool sortProc
 
 	auto minX = 30;
 
-	minX += Helpers::ParameterMargin + ParameterWidth;
+	minX += Helpers::ParameterMargin + (isContainerNode(node) ? ContainerParameterWidth : ParameterWidth);
 
 	if(isContainerNode(node))
 	{
@@ -496,7 +576,7 @@ void Helpers::fixOverlapRecursive(ValueTree node, UndoManager* um, bool sortProc
 		});
 
 		if(intendForConnections)
-			minX += Helpers::ParameterWidth;
+			minX += Helpers::ContainerParameterWidth;
 	}
 
 	auto minY = 10 + HeaderHeight;
@@ -744,6 +824,60 @@ juce::Path Helpers::createPinHole()
 	return pin;
 }
 
+void Helpers::createCustomizableCurve(Path& path, Point<float> start, Point<float> end, float offset, float roundedCorners/*=10.0f*/, bool startNewPath/*=true*/)
+{
+	float dx = end.x - start.x;
+	float dy = end.y - start.y;
+
+	if (dx < 0.0f)
+	{
+		//offset = jlimit(-1.0f, 1.0f, offset);
+		//offset *= dy * 0.5;
+
+		offset = jlimit(-std::abs(dy) * 0.5f, std::abs(dy) * 0.5f, offset);
+
+		auto cx1 = start.translated(15.0f, 0.0f);
+		auto cx2 = end.translated(-15.0f, 0.0f);
+
+		auto mid1 = cx1.translated(0.0f, offset + dy * 0.5f);
+		auto mid2 = cx2.translated(0.0f, offset + dy * -0.5f);
+
+		if (startNewPath)
+			path.startNewSubPath(start);
+
+		path.lineTo(cx1);
+		path.lineTo(mid1);
+		path.lineTo(mid2);
+		path.lineTo(cx2);
+		path.lineTo(end);
+
+		if (roundedCorners > 0.0f)
+			path = path.createPathWithRoundedCorners(roundedCorners);
+	}
+	else
+	{
+		//offset = jlimit(-0.5f, 0.5f, offset);
+		//offset *= dx;
+
+		offset = jlimit(-std::abs(dx) * 0.5f, std::abs(dx) * 0.5f, offset);
+
+		auto midX = start.x + dx * 0.5f + offset;
+
+		const auto ARC = jmin(std::abs(dy * 0.5f), roundedCorners);
+
+		float sign = end.y > start.y ? 1.0f : -1.0f;
+
+		if (startNewPath)
+			path.startNewSubPath(start);
+
+		path.lineTo(midX - ARC, start.y);
+		path.quadraticTo(midX, start.y, midX, start.y + ARC * sign);
+		path.lineTo(midX, end.y - ARC * sign);
+		path.quadraticTo(midX, end.y, midX + ARC, end.y);
+		path.lineTo(end);
+	}
+}
+
 int CommentHelpers::getCommentWidth(ValueTree data)
 {
 	 return jmax(128, (int)data[UIPropertyIds::CommentWidth]);
@@ -752,6 +886,34 @@ int CommentHelpers::getCommentWidth(ValueTree data)
 Point<int> CommentHelpers::getCommentOffset(ValueTree data)
 {
 	return { (int)data[UIPropertyIds::CommentOffsetX], (int)data[UIPropertyIds::CommentOffsetY] };
+}
+
+juce::ValueTree ParameterHelpers::findConnectionParent(const ValueTree& con)
+{
+	jassert(con.getType() == PropertyIds::Connection);
+
+	auto p = valuetree::Helpers::findParentWithType(con, PropertyIds::Parameter);
+
+	if (p.isValid())
+		return p;
+
+	auto mt = valuetree::Helpers::findParentWithType(con, PropertyIds::ModulationTargets);
+
+	if (mt.isValid())
+		return mt;
+
+	auto rt = valuetree::Helpers::findParentWithType(con, PropertyIds::ReceiveTargets);
+
+	if (rt.isValid())
+		return mt;
+
+	auto sw = valuetree::Helpers::findParentWithType(con, PropertyIds::SwitchTarget);
+
+	if (sw.isValid())
+		return sw;
+
+	jassertfalse;
+	return ValueTree();
 }
 
 bool ParameterHelpers::isRoutingReceiveNode(const ValueTree& v)
@@ -1085,6 +1247,20 @@ void LayoutTools::distributeCableOffsets(const Array<ValueTree>& list, UndoManag
 		for(int i = 0; i < list.size(); i++)
 			list[i].setProperty(UIPropertyIds::CableOffset, minOffset + delta * (float)i, um);
 	}
+}
+
+bool DataBaseHelpers::isSignalNode(const ValueTree& v)
+{
+	auto p = v[PropertyIds::FactoryPath].toString();
+
+	NodeDatabase db;
+
+	if (auto obj = db.getProperties(p))
+	{
+		return !obj->getProperty(PropertyIds::OutsideSignalPath);
+	}
+
+	return false;
 }
 
 }

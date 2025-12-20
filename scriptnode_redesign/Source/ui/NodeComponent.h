@@ -38,7 +38,8 @@ using namespace hise;
 using namespace juce;
 
 
-struct SelectableComponent: public ChangeListener
+struct SelectableComponent: public ChangeListener,
+							public ParameterSourceObject
 {
 	using WeakPtr = WeakReference<SelectableComponent>;
 	using Selection = SelectedItemSet<WeakPtr>;
@@ -208,79 +209,7 @@ struct SelectableComponent: public ChangeListener
 			return ok;
 		}
 
-		Result create(const Array<ValueTree>& list, Point<int> startPoint)
-		{
-			if (list.isEmpty())
-				return Result::fail("No selection");
-
-			auto container = list.getFirst().getParent().getParent();
-			jassert(container.getType() == PropertyIds::Node);
-			auto isVertical = Helpers::shouldBeVertical(container);
-
-			int insertIndex = -1;
-			RectangleList<int> positions;
-
-			for (const auto& d : list)
-			{
-				insertIndex = d.getParent().indexOf(d) + 1;
-				positions.add(Helpers::getBounds(d, true));
-			}
-
-			// make it overlap for the fix algorithm to position them properly
-			int deltaX = isVertical ? 0 : (positions.getBounds().getWidth() - 10);
-			int deltaY = isVertical ? (positions.getBounds().getHeight() - 10) : 0;
-
-			if (!startPoint.isOrigin())
-			{
-				deltaX = startPoint.getX() - positions.getBounds().getX();
-				deltaY = startPoint.getY() - positions.getBounds().getY();
-			}
-
-			auto rootTree = valuetree::Helpers::findParentWithType(list[0], PropertyIds::Network);
-
-			Array<ValueTree> newTrees;
-
-			for (auto& n : list)
-			{
-				auto copy = n.createCopy();
-				auto t = Helpers::getHeaderTitle(copy);
-				copy.setProperty(PropertyIds::Name, t, nullptr);
-				Helpers::translatePosition(copy, { deltaX, deltaY }, nullptr);
-				newTrees.add(copy);
-			}
-
-
-			BuildHelpers::updateIds(rootTree, newTrees);
-
-			for(auto n: newTrees)
-				container.getChildWithName(PropertyIds::Nodes).addChild(n, insertIndex++, &um);
-
-			Helpers::updateChannelCount(rootTree, false, &um);
-			Helpers::fixOverlap(Helpers::getCurrentRoot(container), &um, false);
-
-			MessageManager::callAsync([newTrees, this]()
-			{
-				setSelection(newTrees);
-
-				auto asC = dynamic_cast<Component*>(this);
-
-				auto zp = asC->findParentComponentOfClass<ZoomableViewport>();
-
-				RectangleList<int> all;
-
-				for(auto& s: selection.getItemArray())
-				{
-					auto sc = dynamic_cast<Component*>(s.get());
-
-					if(sc != nullptr)
-						all.addWithoutMerging(asC->getLocalArea(sc, sc->getLocalBounds()));
-				}
-
-				zp->scrollToRectangle(all.getBounds(), true, true);
-			});
-
-			return Result::ok();
-		}
+		Result create(const Array<ValueTree>& list, Point<int> startPoint);
 
 		Result pasteSelection(Point<int> startPoint)
 		{
@@ -448,7 +377,10 @@ struct SelectableComponent: public ChangeListener
 		}
 	}
 
-	virtual ValueTree getValueTree() const = 0;
+	snex::Types::PrepareSpecs getLastPrepareSpecs() const override
+	{
+		return Helpers::getDummyPrepareSpecs();
+	}
 
 	Lasso* lasso;
 	bool selected = false;
@@ -458,8 +390,7 @@ struct SelectableComponent: public ChangeListener
 
 struct NodeComponent : public Component,
 	public SelectableComponent,
-	public PathFactory,
-	public simple_visualiser::ParameterSource
+	public PathFactory
 {
 	struct HeaderComponent : public CablePinBase,
 							 public ComponentBoundsConstrainer
@@ -471,13 +402,10 @@ struct NodeComponent : public Component,
 			closeButton("delete", nullptr, parent_),
 			dragger()
 		{
-			
-			
-
 			addAndMakeVisible(powerButton);
 
 			if(!Helpers::isRootNode(v))
-				addChildComponent(closeButton);
+				addAndMakeVisible(closeButton);
 
 			powerButton.onClick = [this]()
 			{
@@ -509,18 +437,6 @@ struct NodeComponent : public Component,
 			}
 		};
 
-		
-
-		void mouseEnter(const MouseEvent& e) override
-		{
-			closeButton.setVisible(true);
-		}
-
-		void mouseExit(const MouseEvent& e) override
-		{
-			closeButton.setVisible(getLocalBounds().contains(e.getPosition()));
-		}
-
 		void resized() override
 		{
 			powerButton.setVisible(parent.hasSignal);
@@ -531,7 +447,7 @@ struct NodeComponent : public Component,
 			for(int i = breadcrumbs.size() - 1; i >= 0; i--)
 				breadcrumbs[i]->setBounds(b.removeFromLeft(breadcrumbs[i]->getWidth()));
 
-			closeButton.setBounds(b.removeFromRight(getHeight()).reduced(2));
+			closeButton.setBounds(b.removeFromRight(getHeight()).reduced(4));
 		}
 
 		String getSourceDescription() const override { return ""; }
@@ -623,6 +539,30 @@ struct NodeComponent : public Component,
 		String getTargetParameterId() const override { return "Bypassed"; }
 
 		ValueTree getConnectionTree() const override { return {}; }
+
+		ScopedPointer<TextEditor> renameEditor;
+
+		void rename()
+		{
+			addAndMakeVisible(renameEditor = new TextEditor());
+			GlobalHiseLookAndFeel::setTextEditorColours(*renameEditor);
+
+			renameEditor->setFont(GLOBAL_FONT());
+			renameEditor->setColour(TextEditor::ColourIds::backgroundColourId, Colour(0xFF666666));
+			renameEditor->getTextValue().referTo(parent.getValueTree().getPropertyAsValue(PropertyIds::Name, parent.um));
+
+			renameEditor->setBounds(getLocalBounds());
+
+			renameEditor->setBorder(BorderSize<int>(0, Helpers::HeaderHeight, 0, 0));
+
+			renameEditor->onFocusLost = [this]()
+			{
+				renameEditor = nullptr;
+			};
+
+			renameEditor->setSelectAllWhenFocused(true);
+			renameEditor->grabKeyboardFocusAsync();
+		}
 
 		void mouseDoubleClick(const MouseEvent& event) override;
 
@@ -735,7 +675,7 @@ struct NodeComponent : public Component,
 		};
 
 		NodeComponent& parent;
-		HiseShapeButton closeButton;
+		PowerButton closeButton;
 		PowerButton powerButton;
 
 		OwnedArray<BreadcrumbButton> breadcrumbs;
@@ -743,12 +683,14 @@ struct NodeComponent : public Component,
 		juce::ComponentDragger dragger;
 	};
 
-	struct PopupComponent: public Component
+	struct PopupComponent: public Component,
+						   public ParameterSourceObject
 	{
 		PopupComponent(NodeComponent& nc):
 		  data(nc.getValueTree()),
 		  um(nc.um)
 		{
+			setName("Edit " + Helpers::getHeaderTitle(data));
 			setColour(complex_ui_laf::NodeColourId, Helpers::getNodeColour(data));
 			extraBody = nc.createBodyComponent();
 
@@ -833,6 +775,26 @@ struct NodeComponent : public Component,
 			}
 		}
 
+		ValueTree getValueTree() const override { return data; }
+		UndoManager* getUndoManager() const override { return um; }
+		
+		double getParameterValue(int index) const override
+		{
+			auto ptree = getValueTree().getChildWithName(PropertyIds::Parameters).getChild(index);
+			return ParameterHelpers::getThisValueOrFindDirectSource(ptree);
+		}
+
+		InvertableParameterRange getParameterRange(int index) const override
+		{
+			auto ptree = getValueTree().getChildWithName(PropertyIds::Parameters).getChild(index);
+			return RangeHelpers::getDoubleRange(ptree);
+		}
+
+		snex::Types::PrepareSpecs getLastPrepareSpecs() const override
+		{
+			return Helpers::getDummyPrepareSpecs();
+		}
+
 		ValueTree data;
 		UndoManager* um;
 		OwnedArray<ParameterComponent> parameters;
@@ -853,8 +815,6 @@ struct NodeComponent : public Component,
 		header(*this, v, um),
 		hasSignal(useSignal)
 	{
-		
-
 		addAndMakeVisible(header);
 
 		positionListener.setCallback(v,
@@ -874,13 +834,13 @@ struct NodeComponent : public Component,
 		colourListener.setCallback(data, { PropertyIds::NodeColour }, Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onColour));
 	};
 
-	Component* createBodyComponent()
+	ScriptnodeExtraComponentBase* createBodyComponent()
 	{
 		if(lasso != nullptr)
 		{
 			UIFactory f;
 
-			if(auto b = f.createExtraComponent(getValueTree(), um, nullptr, getUpdater()))
+			if(auto b = f.createExtraComponent(this, nullptr, getUpdater()))
 				return b;
 
 			auto cdTree = getValueTree().getChildWithName(PropertyIds::ComplexData);
@@ -955,13 +915,18 @@ struct NodeComponent : public Component,
 	void rebuildDefaultParametersAndOutputs()
 	{
 		parameters.clear();
-		modOutputs.clear();
 
 		for (auto p : data.getChildWithName(PropertyIds::Parameters))
 		{
 			addAndMakeVisible(parameters.add(new ParameterComponent(getUpdater(), p, um)));
 		}
 
+		rebuildModulationOutputs();
+	}
+
+	void rebuildModulationOutputs()
+	{
+		modOutputs.clear();
 		auto modOutput = data.getChildWithName(PropertyIds::ModulationTargets);
 
 		if (modOutput.isValid())
@@ -972,7 +937,14 @@ struct NodeComponent : public Component,
 		for (auto st : data.getChildWithName(PropertyIds::SwitchTargets))
 			addAndMakeVisible(modOutputs.add(new ModOutputComponent(st, um)));
 
+		
+
 		resized();
+	}
+
+	void rename()
+	{
+		header.rename();
 	}
 
 	void resized() override
@@ -985,7 +957,7 @@ struct NodeComponent : public Component,
 
 		Rectangle<int> pb;
 
-		auto ParameterWidth = Helpers::ParameterWidth;
+		auto ParameterWidth = Helpers::isContainerNode(getValueTree()) ? Helpers::ContainerParameterWidth : Helpers::ParameterWidth;
 
 		if (getValueTree()[PropertyIds::Folded])
 			ParameterWidth -= Helpers::ParameterHeight;
@@ -1012,17 +984,17 @@ struct NodeComponent : public Component,
 
 	ValueTree getValueTree() const override { return data; }
 
-	UndoManager* getUndoManager() { return um; }
+	UndoManager* getUndoManager() const override { return um; }
 
 	const bool hasSignal;
 
 	int getParameterHeight() const { return Helpers::ParameterHeight; }
 
-	void setFixSize(Rectangle<int> extraBounds)
+	void setFixSize(Rectangle<int> extraBounds, ScriptnodeExtraComponentBase::PreferredLayout preferredLayout = ScriptnodeExtraComponentBase::PreferredLayout::PreferTop)
 	{
 		int x = 0;
 
-		auto ParameterWidth = Helpers::ParameterWidth;
+		auto ParameterWidth = Helpers::isContainerNode(getValueTree()) ? Helpers::ContainerParameterWidth : Helpers::ParameterWidth;
 
 		if (getValueTree()[PropertyIds::Folded])
 			ParameterWidth -= Helpers::ParameterHeight;
@@ -1032,9 +1004,9 @@ struct NodeComponent : public Component,
 
 		int y = Helpers::HeaderHeight;
 
-		
+		auto between = preferredLayout == ScriptnodeExtraComponentBase::PreferredLayout::PreferBetween;
 
-		if(false && !hasSignal)
+		if(between)
 			x += extraBounds.getWidth();
 
 		if (!modOutputs.isEmpty())
@@ -1053,7 +1025,7 @@ struct NodeComponent : public Component,
 		
 		parameterHeight = jmax(parameterHeight, modHeight);
 
-		if(true || hasSignal)
+		if(!between)
 			bodyHeight = extraBounds.getHeight() + parameterHeight;
 		else
 			bodyHeight = jmax(extraBounds.getHeight(), parameterHeight);
@@ -1063,7 +1035,7 @@ struct NodeComponent : public Component,
 		x = jmax(x, extraBounds.getWidth());
 
 		if(Helpers::hasRoutableSignal(data))
-			x = jmax(x, Helpers::ParameterWidth + 2 * Helpers::ParameterMargin);
+			x = jmax(x, ParameterWidth + 2 * Helpers::ParameterMargin);
 
 		Rectangle<int> nb(getPosition(), getPosition().translated(x, y + bodyHeight));
 
@@ -1099,13 +1071,13 @@ struct NodeComponent : public Component,
 
 protected:
 
-	
-
 	ValueTree data;
 	UndoManager* um;
 
 	OwnedArray<ParameterComponent> parameters;
 	OwnedArray<ModOutputComponent> modOutputs;
+
+	ScopedPointer<ParameterHelpers::ModOutputSyncer> multiOutputManager;
 
 	valuetree::PropertyListener positionListener;
 	valuetree::PropertyListener foldListener;
@@ -1176,8 +1148,8 @@ struct ContainerComponentBase
 		if (!outsideLabel.isEmpty() && !outsideParameters.isEmpty())
 		{
 			g.setFont(GLOBAL_FONT());
-			g.setColour(Colours::white.withAlpha(0.3f));
-			g.drawText("External Connections", outsideLabel.toFloat(), Justification::centred);
+			g.setColour(Helpers::getNodeColour(asNodeComponent().getValueTree()));
+			g.drawText("External Connections", outsideLabel.toFloat(), Justification::centredLeft);
 		}
 	}
 
@@ -1206,6 +1178,7 @@ struct ContainerComponentBase
 		if (!outsideParameters.isEmpty())
 		{
 			outsideLabel = { 0.0f, (float)yOffset, (float)(Helpers::ParameterMargin + Helpers::ParameterWidth), 20.0f };
+			outsideLabel.removeFromLeft(Helpers::ParameterMargin);
 			yOffset += 25;
 		}
 

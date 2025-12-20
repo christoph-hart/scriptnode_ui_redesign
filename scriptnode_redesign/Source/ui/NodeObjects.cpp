@@ -57,7 +57,7 @@ LockedContainerComponent::LockedContainerComponent(Lasso* l, const ValueTree& v,
 
 	gotoButton.onClick = [this]()
 	{
-		DspNetworkComponent::switchRootNode(this, getValueTree());
+		NetworkParent::setNewContent(this, getValueTree());
 	};
 
 	header.addAndMakeVisible(gotoButton);
@@ -65,8 +65,8 @@ LockedContainerComponent::LockedContainerComponent(Lasso* l, const ValueTree& v,
 
 Component* LockedContainerComponent::createPopupComponent()
 {
-	auto p = DspNetworkComponent::Parent::getParent(this);
-	return new DspNetworkComponent::Parent::Map(getValueTree(), *p, {});
+	auto p = NetworkParent::getNetworkParent(this);
+	return new NetworkParent::Map(getValueTree(), *p, {});
 }
 
 }

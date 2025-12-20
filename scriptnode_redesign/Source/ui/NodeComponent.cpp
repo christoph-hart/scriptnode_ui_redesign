@@ -285,6 +285,80 @@ void NodeComponent::HeaderComponent::mouseUp(const MouseEvent& e)
 }
 
 
+Result SelectableComponent::Lasso::create(const Array<ValueTree>& list, Point<int> startPoint)
+{
+	if (list.isEmpty())
+		return Result::fail("No selection");
+
+	auto container = list.getFirst().getParent().getParent();
+	jassert(container.getType() == PropertyIds::Node);
+	auto isVertical = Helpers::shouldBeVertical(container);
+
+	int insertIndex = -1;
+	RectangleList<int> positions;
+
+	for (const auto& d : list)
+	{
+		insertIndex = d.getParent().indexOf(d) + 1;
+		positions.add(Helpers::getBounds(d, true));
+	}
+
+	// make it overlap for the fix algorithm to position them properly
+	int deltaX = isVertical ? 0 : (positions.getBounds().getWidth() - 10);
+	int deltaY = isVertical ? (positions.getBounds().getHeight() - 10) : 0;
+
+	if (!startPoint.isOrigin())
+	{
+		deltaX = startPoint.getX() - positions.getBounds().getX();
+		deltaY = startPoint.getY() - positions.getBounds().getY();
+	}
+
+	auto rootTree = valuetree::Helpers::findParentWithType(list[0], PropertyIds::Network);
+
+	Array<ValueTree> newTrees;
+
+	for (auto& n : list)
+	{
+		auto copy = n.createCopy();
+		auto t = Helpers::getHeaderTitle(copy);
+		copy.setProperty(PropertyIds::Name, t, nullptr);
+		Helpers::translatePosition(copy, { deltaX, deltaY }, nullptr);
+		newTrees.add(copy);
+	}
+
+
+	BuildHelpers::updateIds(rootTree, newTrees);
+
+	for (auto n : newTrees)
+		container.getChildWithName(PropertyIds::Nodes).addChild(n, insertIndex++, &um);
+
+	Helpers::updateChannelCount(rootTree, false, &um);
+	Helpers::fixOverlap(Helpers::getCurrentRoot(container), &um, false);
+
+	MessageManager::callAsync([newTrees, this]()
+	{
+		setSelection(newTrees);
+
+		auto asC = dynamic_cast<Component*>(this);
+
+		auto zp = asC->findParentComponentOfClass<ZoomableViewport>();
+
+		RectangleList<int> all;
+
+		for (auto& s : selection.getItemArray())
+		{
+			auto sc = dynamic_cast<Component*>(s.get());
+
+			if (sc != nullptr)
+				all.addWithoutMerging(asC->getLocalArea(sc, sc->getLocalBounds()));
+		}
+
+		NetworkParent::scrollToRectangle(asC, all.getBounds(), true);
+	});
+
+	return Result::ok();
+}
+
 void SelectableComponent::Lasso::groupSelection()
 {
 	if (selection.getNumSelected() == 0)
@@ -339,12 +413,11 @@ void SelectableComponent::Lasso::groupSelection()
 	}
 }
 
+
+
 void NodeComponent::HeaderComponent::BreadcrumbButton::mouseUp(const MouseEvent& e)
 {
-	auto zp = findParentComponentOfClass<ZoomableViewport>();
-	auto root = valuetree::Helpers::getRoot(data);
-	auto updater = findParentComponentOfClass<Lasso>()->getUpdater();
-	zp->setNewContent(new DspNetworkComponent(updater, *zp, root, data), nullptr);
+	NetworkParent::setNewContent(this, data);
 }
 
 void NodeComponent::onFold(const Identifier& id, const var& newValue)

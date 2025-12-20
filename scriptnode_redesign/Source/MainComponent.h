@@ -63,20 +63,20 @@ ROADMAP:
 - extra components OK
 - clone nodes
 - containers with fixed parameters (not draggable, no add possible)
-- external data
-- add visualisation for modulated parameters (use a query lambda)
+- external data OK
+- add visualisation for modulated parameters (use a query lambda) OK
 
 BUGS:
 
 - fix alignment & distribution with folded / locked containers
-- fix cables being displayed for folded containers
+- fix cables being displayed for folded containers OK
 - fix reset mixing up process node positions despite lock
-- fix crash when dragging parameter cables
-- fix descriptions not appearing anymore
-- fix cable nodes not appearing
-- fix HideCable being reset when going into locked container
-- fix autocomplete appearing within visible area
-- update start / end pin connections at LOD change
+- fix crash when dragging parameter cables OK
+- fix descriptions not appearing anymore OK
+- fix cable nodes not appearing OK
+- fix HideCable being reset when going into locked container OK
+- fix autocomplete appearing within visible area OK
+- update start /  end pin connections at LOD change OK
 - fix combobox / toggle button appearing at locked targets
 
 FEATURES:
@@ -86,7 +86,7 @@ FEATURES:
 - add double click on connection to goto source / target
 - add context menu with actions
 - add dynamic process signal flag with path stuff for extra_mods (all nodes that have a ProcessSignal / AddToSignal parameter)
-- add view undomanager with back buttons
+- add view undomanager with back buttons OK
 
 */
 
@@ -103,7 +103,7 @@ FEATURES:
 class MainComponent  : public juce::Component,
                        public PathFactory,
                        public valuetree::AnyListener,
-                       public scriptnode::DspNetworkComponent::Parent
+                       public scriptnode::NetworkParent
 {
     static constexpr int MenuHeight = 24;
 

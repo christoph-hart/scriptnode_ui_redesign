@@ -33,8 +33,11 @@
 #include "include.h"
 
 #include "Helpers.cpp"
+#include "ComponentFactory.cpp"
 #include "NodeSubComponent.cpp"
 #include "NodeComponent.cpp"
 #include "NodeObjects.cpp"
 #include "ContainerComponent.cpp"
+#include "CableComponents.cpp"
+#include "ParentClasses.cpp"
 #include "DspNetworkComponent.cpp"

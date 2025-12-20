@@ -320,80 +320,17 @@ struct ParameterComponent : public CablePinBase,
 
 		slider.addListener(this);
 
-		rangeUpdater.setCallback(data, RangeHelpers::getRangeIds(), Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onRange));
-		
+		auto rangeIds = RangeHelpers::getRangeIds();
+		rangeIds.add(PropertyIds::TextToValueConverter);
 
+		rangeUpdater.setCallback(data, rangeIds, Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onRange));
+		
 		automationUpdater.setCallback(data, { PropertyIds::Automated }, Helpers::UIMode, VT_BIND_PROPERTY_LISTENER(onAutomated));
 		onAutomated({}, data[PropertyIds::Automated]);
 
-		auto vtc = ValueToTextConverter::fromString(v[PropertyIds::TextToValueConverter].toString());
-
-		if(vtc.active)
-		{
-			slider.textFromValueFunction = vtc;
-			slider.valueFromTextFunction = vtc;
-		}
-
 		addChildComponent(dropDown);
 
-		if(!vtc.itemList.isEmpty())
-		{
-			dropDown.setLookAndFeel(&laf);
-			dropDown.setVisible(true);
-
-			if(vtc.itemList.size() == 2)
-			{
-				auto on = (int)data[PropertyIds::Value];
-				dropDown.setButtonText(vtc.itemList[on]);
-				dropDown.setClickingTogglesState(true);
-				dropDown.setToggleState(on, dontSendNotification);
-				
-				dropDown.onClick = [this, vtc]()
-				{
-					auto v = 1 - (int)dropDown.getToggleState();
-					data.setProperty(PropertyIds::Value, 1 - v, um);
-					dropDown.setButtonText(vtc.itemList[v]);
-				};
-			}
-			else
-			{
-				dropDown.onClick = [this, vtc]()
-				{
-					PopupMenu m;
-					m.setLookAndFeel(&laf);
-
-					auto value = (int)this->data[PropertyIds::Value];
-
-					bool automated = false;
-
-					if(this->data[PropertyIds::Automated])
-					{
-						automated = true;
-						value = (int)this->lastValue;
-					}
-						
-
-					for (int i = 0; i < vtc.itemList.size(); i++)
-					{
-						auto s = vtc.itemList[i];
-						s << " (" << String(i) << ')';
-
-						m.addItem(1 + i, s, !automated, i == value);
-					}
-
-					auto r = m.showAt(&dropDown);
-
-					if (r != 0)
-					{
-						data.setProperty(PropertyIds::Value, r - 1, um);
-						repaint();
-					}
-				};
-			}
-
-			
-			slider.setVisible(false);
-		}
+		
 
 		setSize(Helpers::ParameterWidth, Helpers::ParameterHeight);
 
@@ -405,7 +342,9 @@ struct ParameterComponent : public CablePinBase,
 			
 			auto hasFixed = db.getProperties(parentNode[PropertyIds::FactoryPath])->hasProperty(PropertyIds::HasFixedParameters);
 
-			setEnableDragging(!hasFixed);
+			auto hasPosition = !Helpers::getPosition(v).isOrigin();
+
+			setEnableDragging(!hasFixed && !hasPosition);
 
 			if (!v.hasProperty(PropertyIds::NodeColour))
 			{
@@ -424,7 +363,7 @@ struct ParameterComponent : public CablePinBase,
 
 	void timerCallback() override
 	{
-		if(auto pc = findParentComponentOfClass<scriptnode::NodeComponentParameterSource>())
+		if(auto pc = findParentComponentOfClass<scriptnode::ParameterSourceObject>())
 		{
 			auto idx = data.getParent().indexOf(data);
 			auto nv = pc->getParameterValue(idx);
@@ -574,6 +513,76 @@ struct ParameterComponent : public CablePinBase,
 	{
 		auto nr = RangeHelpers::getDoubleRange(data);
 		slider.setNormalisableRange(nr.rng);
+
+		auto vtc = ValueToTextConverter::fromString(data[PropertyIds::TextToValueConverter].toString());
+
+		if (vtc.active)
+		{
+			slider.textFromValueFunction = vtc;
+			slider.valueFromTextFunction = vtc;
+		}
+
+		if (!vtc.itemList.isEmpty())
+		{
+			dropDown.setLookAndFeel(&laf);
+			dropDown.setVisible(true);
+
+			if (vtc.itemList.size() == 2)
+			{
+				auto on = (int)data[PropertyIds::Value];
+				dropDown.setButtonText(vtc.itemList[on]);
+				dropDown.setClickingTogglesState(true);
+				dropDown.setToggleState(on, dontSendNotification);
+
+				dropDown.onClick = [this, vtc]()
+				{
+					auto v = 1 - (int)dropDown.getToggleState();
+					data.setProperty(PropertyIds::Value, 1 - v, um);
+					dropDown.setButtonText(vtc.itemList[v]);
+				};
+			}
+			else
+			{
+				dropDown.onClick = [this, vtc]()
+				{
+					PopupMenu m;
+					m.setLookAndFeel(&laf);
+
+					auto value = (int)this->data[PropertyIds::Value];
+
+					bool automated = false;
+
+					if (this->data[PropertyIds::Automated])
+					{
+						automated = true;
+						value = (int)this->lastValue;
+					}
+
+
+					for (int i = 0; i < vtc.itemList.size(); i++)
+					{
+						auto s = vtc.itemList[i];
+						s << " (" << String(i) << ')';
+
+						m.addItem(1 + i, s, !automated, i == value);
+					}
+
+					auto r = m.showAt(&dropDown);
+
+					if (r != 0)
+					{
+						data.setProperty(PropertyIds::Value, r - 1, um);
+						repaint();
+					}
+				};
+			}
+
+
+			slider.setVisible(false);
+		}
+
+		resized();
+		repaint();
 	}
 
 	juce::Slider slider;
@@ -816,6 +825,7 @@ struct BuildHelpers
 		WeakReference<CablePinBase> target;
 		Point<int> pointInContainer;
 		int signalIndex = -1;
+		bool isCableNode = false;
 	};
 
 	static void forEach(const ValueTree& root, const Identifier& typeId, const std::function<void(ValueTree&)>& f)
@@ -948,6 +958,9 @@ struct BuildHelpers
 			{
 				if (nodeIds.contains(c[PropertyIds::NodeId].toString()))
 					connectionsToBeRemoved.add(c);
+
+				if(c.isAChildOf(vToBeDeleted))
+					connectionsToBeRemoved.add(c);
 			});
 
 			for(auto& c: connectionsToBeRemoved)
@@ -1057,7 +1070,7 @@ struct BuildHelpers
 
 	static ValueTree createNode(const NodeDatabase& db, const String& factoryPath, const CreateData& cd, UndoManager* um)
 	{
-		jassert(cd.source != nullptr || cd.signalIndex != -1);
+		jassert(cd.isCableNode == (cd.signalIndex == -1));
 
 		Colour c;
 
@@ -1101,13 +1114,24 @@ struct BuildHelpers
 		{
 			auto conTree = cd.source->getConnectionTree();
 
-			ValueTree nc(PropertyIds::Connection);
-			nc.setProperty(PropertyIds::NodeId, newId, nullptr);
-			nc.setProperty(PropertyIds::ParameterId, "Value", nullptr);
-			conTree.addChild(nc, -1, um);
-
 			auto ptree = v.getOrCreateChildWithName(PropertyIds::Parameters, nullptr);
-			ptree.getChildWithProperty(PropertyIds::ID, "Value").setProperty(PropertyIds::Automated, true, nullptr);
+			auto firstParameter = ptree.getChild(0);
+
+			String pId;
+
+			if (firstParameter.isValid())
+			{
+				firstParameter.setProperty(PropertyIds::Automated, true, nullptr);
+				pId = firstParameter[PropertyIds::ID].toString();
+			}
+
+			if(pId.isNotEmpty())
+			{
+				ValueTree nc(PropertyIds::Connection);
+				nc.setProperty(PropertyIds::NodeId, newId, nullptr);
+				nc.setProperty(PropertyIds::ParameterId, pId, nullptr);
+				conTree.addChild(nc, -1, um);
+			}
 		}
 
 		if(cd.target != nullptr)
